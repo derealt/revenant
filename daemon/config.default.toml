@@ -1,0 +1,109 @@
+# REVENANT — Default Configuration
+# Copy to ~/.config/revenant/config.toml and customize
+
+[daemon]
+# How often to poll for context switch signals (seconds)
+poll_interval = 5
+# Minutes of inactivity before a "departure" is detected
+absence_threshold_minutes = 15
+# Minutes of activity before ghosts self-destruct
+ghost_ttl_minutes = 5
+# Maximum context cards to retain per project
+max_cards_per_project = 100
+# Days after which old context cards are pruned
+prune_after_days = 30
+# PID file location
+pid_file = "~/.revenant/revenant.pid"
+
+[signals]
+# Which signal sources to enable
+git = true
+editor_enabled = true
+terminal_enabled = true
+clipboard = false       # opt-in: privacy-sensitive
+browser = false         # requires native messaging host
+
+# File patterns to ignore (in addition to .gitignore)
+ignore_patterns = [
+    "node_modules",
+    ".git",
+    "target",
+    "dist",
+    "__pycache__",
+    "*.pyc",
+    ".DS_Store",
+]
+
+[signals.terminal]
+# Shell history files to parse
+history_files = [
+    "~/.zsh_history",
+    "~/.bash_history",
+]
+# How many recent commands to capture
+recent_command_count = 20
+
+[signals.editor]
+# LSP socket path (if available)
+lsp_socket = ""
+# VS Code workspace state path
+vscode_state_dir = "~/.revenant/vscode-state"
+
+[compressor]
+# "rule" for rule-based (no LLM), "llm" for LLM-based
+mode = "rule"
+
+[compressor.llm]
+# Provider: "ollama", "claude", "openai"
+provider = "ollama"
+# Model name
+model = "llama3.2:3b"
+# Endpoint URL (for ollama or compatible API)
+endpoint = "http://localhost:11434/api/generate"
+# API key (for claude/openai — leave empty for ollama)
+api_key = ""
+# Max tokens for context card generation
+max_tokens = 256
+# Temperature — low for deterministic, factual summaries
+temperature = 0.3
+
+[ghosts]
+# Which ghost channels to activate
+vscode_enabled = true
+terminal_enabled = true
+slack_enabled = false
+browser_enabled = false
+obsidian_enabled = false
+
+[ghosts.terminal]
+# File where the terminal ghost writes the motd
+motd_file = "~/.revenant/motd"
+
+[ghosts.slack]
+# Bot token (xoxb-...) — only if slack ghost enabled
+bot_token = ""
+# Your Slack user ID (for ephemeral messages)
+user_id = ""
+# Channel ID for project messages
+channel_id = ""
+
+[ghosts.vscode]
+# Unix socket for communicating with the VS Code extension
+socket_path = "~/.revenant/vscode.sock"
+
+[ghosts.browser]
+# Native messaging host name
+host_name = "com.revenant.ghost"
+
+[ghosts.obsidian]
+# Vault path
+vault_path = ""
+
+[storage]
+# SQLite database location
+db_path = "~/.revenant/revenant.db"
+
+[projects]
+# Manually registered project roots (auto-detected via git otherwise)
+# roots = ["/Users/you/projects/myapp", "/Users/you/work/api"]
+roots = []

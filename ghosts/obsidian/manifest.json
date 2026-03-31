@@ -1,0 +1,9 @@
+{
+  "id": "revenant-ghost",
+  "name": "REVENANT Ghost",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Cognitive context restoration — transient callout blocks showing where you left off",
+  "author": "REVENANT",
+  "isDesktopOnly": true
+}

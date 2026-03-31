@@ -1,0 +1,106 @@
+# REVENANT — Rule-Based Compression Templates
+#
+# When no LLM is configured, the compressor uses these pattern-matching
+# rules to generate context cards from raw signals.
+#
+# Each rule has:
+# - `match`: a signal pattern to check (field.operator.value)
+# - `template`: the text fragment to include in the context card
+# - `priority`: higher priority rules appear first in the summary
+#
+# Template variables:
+#   {branch}        — git branch name
+#   {files}         — comma-separated changed file names
+#   {file_count}    — number of changed files
+#   {active_file}   — most recently edited file
+#   {language}      — detected language of active file
+#   {last_commit}   — most recent commit message
+#   {commands}      — recent terminal commands
+#   {diff_stat}     — git diff statistics
+#   {project}       — project directory name
+
+# ─── Git Signals ────────────────────────────────────────────────────
+
+[[rules]]
+match = "git.branch.not_main"
+template = "on branch `{branch}`"
+priority = 10
+
+[[rules]]
+match = "git.changed_files.exists"
+template = "editing {files}"
+priority = 9
+
+[[rules]]
+match = "git.staged.gt.0"
+template = "with {staged_count} files staged"
+priority = 7
+
+[[rules]]
+match = "git.last_commit.exists"
+template = "last commit: \"{last_commit}\""
+priority = 5
+
+[[rules]]
+match = "git.diff_stat.exists"
+template = "({diff_stat})"
+priority = 4
+
+# ─── Editor Signals ─────────────────────────────────────────────────
+
+[[rules]]
+match = "editor.active_file.exists"
+template = "focused on `{active_file}` ({language})"
+priority = 8
+
+# ─── Terminal Signals ────────────────────────────────────────────────
+
+[[rules]]
+match = "terminal.commands.contains.test"
+template = "running tests"
+priority = 6
+next_step = "check test results and iterate"
+
+[[rules]]
+match = "terminal.commands.contains.build"
+template = "building the project"
+priority = 6
+next_step = "verify the build succeeds"
+
+[[rules]]
+match = "terminal.commands.contains.debug"
+template = "debugging"
+priority = 8
+next_step = "continue investigating the issue"
+
+[[rules]]
+match = "terminal.commands.recent.exists"
+template = "recently ran: {commands}"
+priority = 3
+
+# ─── Next Step Inference ─────────────────────────────────────────────
+
+[[next_step_rules]]
+match = "terminal.last_command.contains.git add"
+template = "commit the staged changes"
+priority = 10
+
+[[next_step_rules]]
+match = "terminal.last_command.contains.git stash"
+template = "pop the stash when ready to continue"
+priority = 10
+
+[[next_step_rules]]
+match = "terminal.last_command.contains.test"
+template = "continue iterating on tests"
+priority = 8
+
+[[next_step_rules]]
+match = "git.staged.gt.0"
+template = "review and commit the staged changes"
+priority = 7
+
+[[next_step_rules]]
+match = "git.modified.gt.5"
+template = "consider breaking this into smaller commits"
+priority = 5

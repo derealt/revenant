@@ -1,0 +1,1131 @@
+//! `rev` CLI — the human interface to the REVENANT daemon
+//!
+//! This is a separate binary (`rev`) that communicates with the daemon
+//! via SQLite (read-only), PID files, and launchctl. It never runs the
+//! daemon itself — it controls and queries it.
+
+use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
+use clap::{Parser, Subcommand};
+use rusqlite::{params, Connection};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+// ─── CLI Definition ──────────────────────────────────────────────────
+
+#[derive(Parser)]
+#[command(
+    name = "rev",
+    about = "REVENANT — cognitive context restoration",
+    long_about = "Control the REVENANT daemon and query your context history.\n\
+                  REVENANT captures what you were doing when you leave a task\n\
+                  and restores it as ghost annotations when you return.",
+    version
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Initialize REVENANT: create directories, config, LaunchAgent, shell hook
+    Init,
+
+    /// Show daemon status, uptime, and latest context card
+    Status,
+
+    /// View context card history
+    History {
+        /// Filter by project directory (defaults to current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Number of cards to show
+        #[arg(short = 'n', long, default_value = "10")]
+        count: usize,
+    },
+
+    /// Stop the daemon (launchctl unload)
+    Off,
+
+    /// Start the daemon (launchctl load)
+    On,
+
+    /// Delete context cards from the database
+    Forget {
+        /// Project directory to forget (defaults to current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Forget ALL context cards across all projects
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Setup a ghost channel (install extension/plugin/bot)
+    Setup {
+        /// Channel to set up: vscode, browser, obsidian, slack
+        channel: String,
+    },
+
+    /// Inject a synthetic context card and dispatch to all enabled ghosts
+    Test,
+}
+
+// ─── Paths ───────────────────────────────────────────────────────────
+
+fn home_dir() -> PathBuf {
+    dirs::home_dir().expect("could not determine home directory")
+}
+
+fn revenant_dir() -> PathBuf {
+    home_dir().join(".revenant")
+}
+
+fn config_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| home_dir().join(".config"))
+        .join("revenant")
+}
+
+fn config_file() -> PathBuf {
+    config_dir().join("config.toml")
+}
+
+fn db_path() -> PathBuf {
+    // Read from config if it exists, otherwise default
+    if let Ok(contents) = std::fs::read_to_string(config_file()) {
+        if let Ok(parsed) = contents.parse::<toml::Table>() {
+            if let Some(storage) = parsed.get("storage").and_then(|v| v.as_table()) {
+                if let Some(path) = storage.get("db_path").and_then(|v| v.as_str()) {
+                    return expand_path(path);
+                }
+            }
+        }
+    }
+    revenant_dir().join("revenant.db")
+}
+
+fn pid_file() -> PathBuf {
+    if let Ok(contents) = std::fs::read_to_string(config_file()) {
+        if let Ok(parsed) = contents.parse::<toml::Table>() {
+            if let Some(daemon) = parsed.get("daemon").and_then(|v| v.as_table()) {
+                if let Some(path) = daemon.get("pid_file").and_then(|v| v.as_str()) {
+                    return expand_path(path);
+                }
+            }
+        }
+    }
+    revenant_dir().join("revenant.pid")
+}
+
+fn plist_label() -> &'static str {
+    "com.revenant.daemon"
+}
+
+fn plist_path() -> PathBuf {
+    home_dir()
+        .join("Library/LaunchAgents")
+        .join(format!("{}.plist", plist_label()))
+}
+
+fn expand_path(path: &str) -> PathBuf {
+    if path.starts_with("~/") {
+        home_dir().join(&path[2..])
+    } else {
+        PathBuf::from(path)
+    }
+}
+
+// ─── SQLite Read Helpers ─────────────────────────────────────────────
+// Mirrors store.rs ContextCard but standalone for the CLI binary
+
+#[derive(Debug)]
+struct ContextCard {
+    id: String,
+    project_dir: String,
+    project_name: String,
+    summary: String,
+    next_step: String,
+    created_at: DateTime<Utc>,
+    ttl_seconds: u64,
+}
+
+fn open_db_readonly() -> Result<Connection> {
+    let path = db_path();
+    if !path.exists() {
+        bail!(
+            "no database found at {}. Is the daemon running? Run `rev init` first.",
+            path.display()
+        );
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening database at {}", path.display()))?;
+
+    conn.execute_batch("PRAGMA busy_timeout = 3000;")?;
+    Ok(conn)
+}
+
+fn row_to_card(row: &rusqlite::Row) -> rusqlite::Result<ContextCard> {
+    Ok(ContextCard {
+        id: row.get(0)?,
+        project_dir: row.get(1)?,
+        project_name: row.get(2)?,
+        summary: row.get(3)?,
+        next_step: row.get(4)?,
+        created_at: {
+            let s: String = row.get(5)?;
+            DateTime::parse_from_rfc3339(&s)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now())
+        },
+        ttl_seconds: row.get::<_, i64>(6)? as u64,
+    })
+}
+
+fn query_cards(conn: &Connection, project_dir: &str, limit: usize) -> Result<Vec<ContextCard>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_dir, project_name, summary, next_step, created_at, ttl_seconds
+         FROM context_cards
+         WHERE project_dir = ?1
+         ORDER BY created_at DESC
+         LIMIT ?2",
+    )?;
+
+    let cards = stmt
+        .query_map(params![project_dir, limit as i64], row_to_card)?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(cards)
+}
+
+fn query_latest(conn: &Connection, project_dir: &str) -> Result<Option<ContextCard>> {
+    let cards = query_cards(conn, project_dir, 1)?;
+    Ok(cards.into_iter().next())
+}
+
+fn query_all_cards(conn: &Connection, limit: usize) -> Result<Vec<ContextCard>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_dir, project_name, summary, next_step, created_at, ttl_seconds
+         FROM context_cards
+         ORDER BY created_at DESC
+         LIMIT ?1",
+    )?;
+
+    let cards = stmt
+        .query_map(params![limit as i64], row_to_card)?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(cards)
+}
+
+fn total_cards(conn: &Connection) -> Result<usize> {
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM context_cards", [], |row| row.get(0))?;
+    Ok(count as usize)
+}
+
+fn known_projects(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT project_dir FROM context_cards ORDER BY project_dir")?;
+    let projects = stmt
+        .query_map([], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(projects)
+}
+
+// ─── Daemon Control ──────────────────────────────────────────────────
+
+fn daemon_pid() -> Option<u32> {
+    let path = pid_file();
+    if !path.exists() {
+        return None;
+    }
+    let contents = std::fs::read_to_string(&path).ok()?;
+    contents.trim().parse::<u32>().ok()
+}
+
+fn is_pid_alive(pid: u32) -> bool {
+    // kill -0 checks if process exists without sending a signal
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn daemon_uptime(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "etime="])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
+}
+
+fn launchctl_load() -> Result<()> {
+    let plist = plist_path();
+    if !plist.exists() {
+        bail!(
+            "LaunchAgent plist not found at {}. Run `rev init` first.",
+            plist.display()
+        );
+    }
+    let output = Command::new("launchctl")
+        .args(["load", "-w"])
+        .arg(&plist)
+        .output()
+        .context("failed to run launchctl load")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("already loaded") || stderr.contains("service already loaded") {
+            println!("\x1b[33mrevenant is already running\x1b[0m");
+        } else {
+            bail!("launchctl load failed: {}", stderr);
+        }
+    }
+    Ok(())
+}
+
+fn launchctl_unload() -> Result<()> {
+    let plist = plist_path();
+    if !plist.exists() {
+        bail!(
+            "LaunchAgent plist not found at {}. Run `rev init` first.",
+            plist.display()
+        );
+    }
+    let output = Command::new("launchctl")
+        .args(["unload", "-w"])
+        .arg(&plist)
+        .output()
+        .context("failed to run launchctl unload")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("Could not find") || stderr.contains("not loaded") {
+            println!("\x1b[33mrevenant is not currently running\x1b[0m");
+        } else {
+            bail!("launchctl unload failed: {}", stderr);
+        }
+    }
+    Ok(())
+}
+
+// ─── Command Implementations ─────────────────────────────────────────
+
+fn cmd_init() -> Result<()> {
+    let rev_dir = revenant_dir();
+    let cfg_dir = config_dir();
+
+    println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} REVENANT INIT \u{2500}\u{2500}\u{2500}\x1b[0m");
+
+    // 1. Create ~/.revenant/
+    std::fs::create_dir_all(&rev_dir)?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m {}", rev_dir.display());
+
+    // 2. Create ~/.config/revenant/
+    std::fs::create_dir_all(&cfg_dir)?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m {}", cfg_dir.display());
+
+    // 3. Copy default config if none exists
+    let cfg_file = config_file();
+    if !cfg_file.exists() {
+        let default_config = include_str!("../config.default.toml");
+        std::fs::write(&cfg_file, default_config)?;
+        println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m {} (default config)", cfg_file.display());
+    } else {
+        println!(
+            "\x1b[2m\u{2502}\x1b[0m \x1b[33m~\x1b[0m {} (already exists)",
+            cfg_file.display()
+        );
+    }
+
+    // 4. Copy shell integration scripts
+    let zsh_source = include_str!("../../ghosts/terminal/revenant.zsh");
+    let bash_source = include_str!("../../ghosts/terminal/revenant.bash");
+    let fish_source = include_str!("../../ghosts/terminal/revenant.fish");
+
+    let zsh_dest = cfg_dir.join("revenant.zsh");
+    let bash_dest = cfg_dir.join("revenant.bash");
+    let fish_dest = cfg_dir.join("revenant.fish");
+
+    std::fs::write(&zsh_dest, zsh_source)?;
+    std::fs::write(&bash_dest, bash_source)?;
+    std::fs::write(&fish_dest, fish_source)?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m shell scripts installed to {}", cfg_dir.display());
+
+    // 5. Find the daemon binary path
+    let daemon_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("revenant")))
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/revenant"));
+
+    // 6. Create macOS LaunchAgent plist
+    let plist = plist_path();
+    let plist_dir = plist.parent().unwrap();
+    std::fs::create_dir_all(plist_dir)?;
+
+    let log_dir = rev_dir.join("logs");
+    std::fs::create_dir_all(&log_dir)?;
+
+    let plist_content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{bin}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{log_dir}/revenant.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{log_dir}/revenant.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_LOG</key>
+        <string>revenant=info</string>
+    </dict>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>"#,
+        label = plist_label(),
+        bin = daemon_bin.display(),
+        log_dir = log_dir.display(),
+    );
+
+    std::fs::write(&plist, &plist_content)?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m {}", plist.display());
+
+    // 7. Add shell hook to .zshrc if not already present
+    let zshrc = home_dir().join(".zshrc");
+    let hook_line =
+        "[ -f ~/.config/revenant/revenant.zsh ] && source ~/.config/revenant/revenant.zsh";
+
+    let already_hooked = if zshrc.exists() {
+        let contents = std::fs::read_to_string(&zshrc)?;
+        contents.contains("revenant.zsh")
+    } else {
+        false
+    };
+
+    if !already_hooked {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&zshrc)?;
+        writeln!(file)?;
+        writeln!(file, "# REVENANT — cognitive context restoration")?;
+        writeln!(file, "{}", hook_line)?;
+        println!(
+            "\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m shell hook added to {}",
+            zshrc.display()
+        );
+    } else {
+        println!(
+            "\x1b[2m\u{2502}\x1b[0m \x1b[33m~\x1b[0m shell hook already in {}",
+            zshrc.display()
+        );
+    }
+
+    // 8. Load the LaunchAgent
+    println!("\x1b[2m\u{2502}\x1b[0m");
+    println!("\x1b[2m\u{2502}\x1b[0m loading daemon...");
+    match launchctl_load() {
+        Ok(()) => println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m daemon loaded"),
+        Err(e) => println!("\x1b[2m\u{2502}\x1b[0m \x1b[31m!\x1b[0m daemon load failed: {e}"),
+    }
+
+    println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500} revenant is awake \u{2500}\u{2500}\u{2500}\x1b[0m");
+    println!();
+    println!("  Open a new terminal to activate the shell hook.");
+    println!("  Run \x1b[36mrev status\x1b[0m to verify the daemon is running.");
+    println!("  Run \x1b[36mrev test\x1b[0m to inject a synthetic ghost.");
+
+    Ok(())
+}
+
+fn cmd_status() -> Result<()> {
+    println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} REVENANT STATUS \u{2500}\u{2500}\u{2500}\x1b[0m");
+
+    // Check PID
+    match daemon_pid() {
+        Some(pid) if is_pid_alive(pid) => {
+            let uptime = daemon_uptime(pid).unwrap_or_else(|| "unknown".to_string());
+            println!(
+                "\x1b[2m\u{2502}\x1b[0m \x1b[32mdaemon\x1b[0m  running (pid {pid}, uptime {uptime})"
+            );
+        }
+        Some(pid) => {
+            println!(
+                "\x1b[2m\u{2502}\x1b[0m \x1b[31mdaemon\x1b[0m  dead (stale pid {pid})"
+            );
+        }
+        None => {
+            println!("\x1b[2m\u{2502}\x1b[0m \x1b[31mdaemon\x1b[0m  not running");
+        }
+    }
+
+    // Database stats
+    let db = db_path();
+    if db.exists() {
+        match open_db_readonly() {
+            Ok(conn) => {
+                let total = total_cards(&conn).unwrap_or(0);
+                let projects = known_projects(&conn).unwrap_or_default();
+                println!(
+                    "\x1b[2m\u{2502}\x1b[0m \x1b[36mstore\x1b[0m   {} context cards across {} projects",
+                    total,
+                    projects.len()
+                );
+
+                // Show latest card for current directory
+                let cwd = std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                if !cwd.is_empty() {
+                    let matching_project = projects.iter().find(|p| cwd.starts_with(p.as_str()));
+
+                    if let Some(project_dir) = matching_project {
+                        if let Ok(Some(card)) = query_latest(&conn, project_dir) {
+                            let age = format_age(card.created_at);
+                            println!("\x1b[2m\u{2502}\x1b[0m");
+                            println!(
+                                "\x1b[2m\u{2502}\x1b[0m \x1b[2mlatest ({}, {} ago):\x1b[0m",
+                                card.project_name, age
+                            );
+                            println!("\x1b[2m\u{2502}\x1b[0m \x1b[36m{}\x1b[0m", card.summary);
+                            if !card.next_step.is_empty() {
+                                println!(
+                                    "\x1b[2m\u{2502}\x1b[0m \x1b[33mNext: {}\x1b[0m",
+                                    card.next_step
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("\x1b[2m\u{2502}\x1b[0m \x1b[31mstore\x1b[0m   error: {e}");
+            }
+        }
+    } else {
+        println!(
+            "\x1b[2m\u{2502}\x1b[0m \x1b[33mstore\x1b[0m   no database yet ({})",
+            db.display()
+        );
+    }
+
+    // Ghost channels
+    println!("\x1b[2m\u{2502}\x1b[0m");
+    let rev = revenant_dir();
+    print_channel_status("terminal", rev.join("motd").exists());
+    print_channel_status("vscode", rev.join("vscode.sock").exists());
+    print_channel_status("slack", rev.join("slack.sock").exists());
+    print_channel_status("obsidian", rev.join("obsidian-state.json").exists());
+    print_channel_status("browser", rev.join("browser-state.json").exists());
+
+    println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
+    Ok(())
+}
+
+fn print_channel_status(name: &str, active: bool) {
+    let indicator = if active {
+        "\x1b[32m*\x1b[0m"
+    } else {
+        "\x1b[2m-\x1b[0m"
+    };
+    let status = if active { "active" } else { "inactive" };
+    println!("\x1b[2m\u{2502}\x1b[0m {indicator} {name:<10} {status}");
+}
+
+fn cmd_history(project: Option<String>, count: usize) -> Result<()> {
+    let conn = open_db_readonly()?;
+
+    let cards = match project {
+        Some(ref dir) => {
+            let abs = if dir.starts_with('/') {
+                dir.clone()
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(dir).to_string_lossy().to_string())
+                    .unwrap_or_else(|_| dir.clone())
+            };
+            query_cards(&conn, &abs, count)?
+        }
+        None => {
+            let cwd = std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let cards = query_cards(&conn, &cwd, count)?;
+            if cards.is_empty() {
+                // Check if cwd is inside a known project
+                let projects = known_projects(&conn)?;
+                let matching = projects.iter().find(|p| cwd.starts_with(p.as_str()));
+                if let Some(project_dir) = matching {
+                    query_cards(&conn, project_dir, count)?
+                } else {
+                    // Show all cards across projects
+                    query_all_cards(&conn, count)?
+                }
+            } else {
+                cards
+            }
+        }
+    };
+
+    if cards.is_empty() {
+        println!("\x1b[2mno context cards found\x1b[0m");
+        return Ok(());
+    }
+
+    println!(
+        "\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} REVENANT HISTORY ({} cards) \u{2500}\u{2500}\u{2500}\x1b[0m",
+        cards.len()
+    );
+
+    for (i, card) in cards.iter().enumerate() {
+        let age = format_age(card.created_at);
+        println!("\x1b[2m\u{2502}\x1b[0m");
+        println!(
+            "\x1b[2m\u{2502}\x1b[0m \x1b[2m[{}]\x1b[0m \x1b[35m{}\x1b[0m \x1b[2m\u{2014} {} ago\x1b[0m",
+            i + 1,
+            card.project_name,
+            age
+        );
+        println!("\x1b[2m\u{2502}\x1b[0m   \x1b[36m{}\x1b[0m", card.summary);
+        if !card.next_step.is_empty() {
+            println!("\x1b[2m\u{2502}\x1b[0m   \x1b[33mNext: {}\x1b[0m", card.next_step);
+        }
+        println!(
+            "\x1b[2m\u{2502}\x1b[0m   \x1b[2mid: {} | ttl: {}s\x1b[0m",
+            &card.id[..std::cmp::min(8, card.id.len())],
+            card.ttl_seconds
+        );
+    }
+
+    println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
+    Ok(())
+}
+
+fn cmd_off() -> Result<()> {
+    launchctl_unload()?;
+    println!("\x1b[2mrevenant resting\x1b[0m");
+    Ok(())
+}
+
+fn cmd_on() -> Result<()> {
+    launchctl_load()?;
+    println!("\x1b[2mrevenant waking\x1b[0m");
+
+    // Wait briefly and verify
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    match daemon_pid() {
+        Some(pid) if is_pid_alive(pid) => {
+            println!("\x1b[32mdaemon running\x1b[0m (pid {pid})");
+        }
+        _ => {
+            println!("\x1b[33mdaemon may still be starting...\x1b[0m");
+            println!("run \x1b[36mrev status\x1b[0m in a moment to check");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_forget(project: Option<String>, all: bool) -> Result<()> {
+    let db = db_path();
+    if !db.exists() {
+        bail!("no database found at {}", db.display());
+    }
+
+    // Open read-write for deletion
+    let conn = Connection::open(&db).context("opening database")?;
+    conn.execute_batch("PRAGMA busy_timeout = 3000;")?;
+
+    if all {
+        print!("\x1b[33mdelete ALL context cards? [y/N] \x1b[0m");
+        use std::io::{self, BufRead, Write};
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        io::stdin().lock().read_line(&mut answer)?;
+
+        if answer.trim().to_lowercase() != "y" {
+            println!("cancelled");
+            return Ok(());
+        }
+
+        let deleted = conn.execute("DELETE FROM context_cards", [])?;
+        conn.execute("DELETE FROM ghost_log", [])?;
+        conn.execute("DELETE FROM project_state", [])?;
+        println!("\x1b[2mforgotten {deleted} context cards\x1b[0m");
+    } else {
+        let project_dir = match project {
+            Some(dir) => {
+                if dir.starts_with('/') {
+                    dir
+                } else {
+                    std::env::current_dir()
+                        .map(|cwd| cwd.join(&dir).to_string_lossy().to_string())
+                        .unwrap_or(dir)
+                }
+            }
+            None => std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .context("could not determine current directory")?,
+        };
+
+        let deleted = conn.execute(
+            "DELETE FROM context_cards WHERE project_dir = ?1",
+            params![project_dir],
+        )?;
+        conn.execute(
+            "DELETE FROM ghost_log WHERE card_id NOT IN (SELECT id FROM context_cards)",
+            [],
+        )?;
+        conn.execute(
+            "DELETE FROM project_state WHERE project_dir = ?1",
+            params![project_dir],
+        )?;
+
+        if deleted > 0 {
+            println!("\x1b[2mforgotten {deleted} context cards for {project_dir}\x1b[0m");
+        } else {
+            println!("\x1b[2mno context cards found for {project_dir}\x1b[0m");
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_setup(channel: &str) -> Result<()> {
+    match channel {
+        "vscode" => {
+            println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} VS Code Ghost Setup \u{2500}\u{2500}\u{2500}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m The VS Code extension communicates with the daemon");
+            println!("\x1b[2m\u{2502}\x1b[0m via a Unix socket at ~/.revenant/vscode.sock.");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+
+            let ext_dir = find_project_root().map(|r| r.join("ghosts/vscode"));
+            if let Ok(ref dir) = ext_dir {
+                if dir.exists() {
+                    println!("\x1b[2m\u{2502}\x1b[0m To install from source:");
+                    println!(
+                        "\x1b[2m\u{2502}\x1b[0m   cd {} && npm install && npm run build",
+                        dir.display()
+                    );
+                    println!("\x1b[2m\u{2502}\x1b[0m   code --install-extension ./revenant-ghost-0.1.0.vsix");
+                }
+            }
+
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m Ensure this is in your config.toml:");
+            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
+            println!("\x1b[2m\u{2502}\x1b[0m   vscode = true");
+            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts.vscode]");
+            println!("\x1b[2m\u{2502}\x1b[0m   socket_path = \"~/.revenant/vscode.sock\"");
+            println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
+        }
+
+        "browser" => {
+            println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} Browser Ghost Setup \u{2500}\u{2500}\u{2500}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m The browser extension polls ~/.revenant/browser-state.json");
+            println!("\x1b[2m\u{2502}\x1b[0m for context cards, or uses Chrome's native messaging API.");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+
+            // Install native messaging host manifest for Chrome
+            let nm_dir = home_dir()
+                .join("Library/Application Support/Google/Chrome/NativeMessagingHosts");
+            std::fs::create_dir_all(&nm_dir)?;
+
+            let daemon_bin = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("revenant")))
+                .unwrap_or_else(|| PathBuf::from("/usr/local/bin/revenant"));
+
+            let nm_manifest = serde_json::json!({
+                "name": "com.revenant.ghost",
+                "description": "REVENANT Ghost \u{2014} cognitive context restoration",
+                "path": daemon_bin.to_string_lossy(),
+                "type": "stdio",
+                "allowed_origins": [
+                    "chrome-extension://*/"
+                ]
+            });
+
+            let nm_path = nm_dir.join("com.revenant.ghost.json");
+            std::fs::write(&nm_path, serde_json::to_string_pretty(&nm_manifest)?)?;
+            println!(
+                "\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m native messaging host: {}",
+                nm_path.display()
+            );
+
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m To build the extension:");
+
+            let ext_dir = find_project_root()
+                .ok()
+                .map(|r| r.join("ghosts/browser"));
+            if let Some(ref dir) = ext_dir {
+                if dir.exists() {
+                    println!(
+                        "\x1b[2m\u{2502}\x1b[0m   cd {} && npm install && npm run build",
+                        dir.display()
+                    );
+                }
+            }
+            println!("\x1b[2m\u{2502}\x1b[0m   Then load as unpacked extension in chrome://extensions");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m Ensure this is in your config.toml:");
+            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
+            println!("\x1b[2m\u{2502}\x1b[0m   browser = true");
+            println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
+        }
+
+        "obsidian" => {
+            println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} Obsidian Ghost Setup \u{2500}\u{2500}\u{2500}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m The Obsidian plugin polls ~/.revenant/obsidian-state.json");
+            println!("\x1b[2m\u{2502}\x1b[0m for context cards and renders them as transient callout blocks.");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+
+            let ext_dir = find_project_root()
+                .ok()
+                .map(|r| r.join("ghosts/obsidian"));
+            if let Some(ref dir) = ext_dir {
+                if dir.exists() {
+                    println!("\x1b[2m\u{2502}\x1b[0m To install:");
+                    println!(
+                        "\x1b[2m\u{2502}\x1b[0m   cd {} && npm install && npm run build",
+                        dir.display()
+                    );
+                    println!("\x1b[2m\u{2502}\x1b[0m   Copy main.js + manifest.json to <vault>/.obsidian/plugins/revenant-ghost/");
+                }
+            }
+
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m Ensure this is in your config.toml:");
+            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
+            println!("\x1b[2m\u{2502}\x1b[0m   obsidian = true");
+            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts.obsidian]");
+            println!("\x1b[2m\u{2502}\x1b[0m   vault_path = \"/path/to/your/vault\"");
+            println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
+        }
+
+        "slack" => {
+            println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} Slack Ghost Setup \u{2500}\u{2500}\u{2500}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m The Slack ghost sends context cards via a Go sidecar bot");
+            println!("\x1b[2m\u{2502}\x1b[0m that communicates with the daemon over a Unix socket.");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m 1. Create a Slack App at https://api.slack.com/apps");
+            println!("\x1b[2m\u{2502}\x1b[0m 2. Add Bot Token Scopes: chat:write, chat:write.customize");
+            println!("\x1b[2m\u{2502}\x1b[0m 3. Install to your workspace");
+            println!("\x1b[2m\u{2502}\x1b[0m 4. Copy the Bot User OAuth Token (xoxb-...)");
+            println!("\x1b[2m\u{2502}\x1b[0m 5. Find your Slack User ID (click your profile > ...)");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            println!("\x1b[2m\u{2502}\x1b[0m Add to your config.toml:");
+            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
+            println!("\x1b[2m\u{2502}\x1b[0m   slack = true");
+            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts.slack]");
+            println!("\x1b[2m\u{2502}\x1b[0m   bot_token = \"xoxb-your-token\"");
+            println!("\x1b[2m\u{2502}\x1b[0m   user_id = \"U0XXXXXXX\"");
+            println!("\x1b[2m\u{2502}\x1b[0m   channel_id = \"C0XXXXXXX\"");
+            println!("\x1b[2m\u{2502}\x1b[0m");
+            let sock = revenant_dir().join("slack.sock");
+            println!("\x1b[2m\u{2502}\x1b[0m Socket path: {}", sock.display());
+            println!("\x1b[2m\u{2502}\x1b[0m The Go bot should listen on this socket.");
+            println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
+        }
+
+        other => {
+            bail!(
+                "unknown channel: '{other}'. Available: vscode, browser, obsidian, slack"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_test() -> Result<()> {
+    let db = db_path();
+    let rev_dir = revenant_dir();
+    std::fs::create_dir_all(&rev_dir)?;
+
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "/tmp/test-project".to_string());
+
+    let project_name = Path::new(&cwd)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "test-project".to_string());
+
+    let card_id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now();
+
+    println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} REVENANT TEST \u{2500}\u{2500}\u{2500}\x1b[0m");
+    println!("\x1b[2m\u{2502}\x1b[0m injecting synthetic context card...");
+    println!("\x1b[2m\u{2502}\x1b[0m");
+
+    // Ensure database exists with schema
+    if let Some(parent) = db.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let conn = Connection::open(&db)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;
+         CREATE TABLE IF NOT EXISTS context_cards (
+             id TEXT PRIMARY KEY,
+             project_dir TEXT NOT NULL,
+             project_name TEXT NOT NULL,
+             summary TEXT NOT NULL,
+             next_step TEXT NOT NULL DEFAULT '',
+             created_at TEXT NOT NULL,
+             signals_json TEXT NOT NULL DEFAULT '{}',
+             ttl_seconds INTEGER NOT NULL DEFAULT 300
+         );
+         CREATE INDEX IF NOT EXISTS idx_cards_project_dir
+             ON context_cards(project_dir);
+         CREATE INDEX IF NOT EXISTS idx_cards_created_at
+             ON context_cards(created_at);
+         CREATE TABLE IF NOT EXISTS ghost_log (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             card_id TEXT NOT NULL,
+             channel TEXT NOT NULL,
+             dispatched_at TEXT NOT NULL,
+             cleared_at TEXT
+         );
+         CREATE TABLE IF NOT EXISTS project_state (
+             project_dir TEXT PRIMARY KEY,
+             last_branch TEXT,
+             last_activity TEXT NOT NULL,
+             last_card_id TEXT
+         );",
+    )?;
+
+    let summary = format!(
+        "You were testing the REVENANT ghost system in {project_name}. \
+         This is a synthetic card injected by `rev test` to verify all ghost channels."
+    );
+    let next_step = "Check each enabled ghost channel to confirm the annotation appeared.";
+
+    conn.execute(
+        "INSERT OR REPLACE INTO context_cards
+            (id, project_dir, project_name, summary, next_step, created_at, signals_json, ttl_seconds)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            card_id,
+            cwd,
+            project_name,
+            summary,
+            next_step,
+            now.to_rfc3339(),
+            "{}",
+            300i64,
+        ],
+    )?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m context card saved to SQLite");
+
+    // Dispatch to terminal ghost (write motd directly)
+    let motd_path = rev_dir.join("motd");
+    let motd = format!(
+        "\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} REVENANT \u{2500}\u{2500}\u{2500} {project} \u{2500}\u{2500}\u{2500} just now \u{2500}\u{2500}\u{2500}\x1b[0m\n\
+         \x1b[2m\u{2502}\x1b[0m \x1b[36m{summary}\x1b[0m\n\
+         \x1b[2m\u{2502}\x1b[0m \x1b[33mNext: {next}\x1b[0m\n\
+         \x1b[2m\u{2514}\u{2500}\u{2500}\u{2500} ghost expires in 5min of activity \u{2500}\u{2500}\u{2500}\x1b[0m\n",
+        project = project_name,
+        summary = summary,
+        next = next_step,
+    );
+    std::fs::write(&motd_path, &motd)?;
+
+    let meta = serde_json::json!({
+        "card_id": card_id,
+        "project": project_name,
+        "created_at": now.to_rfc3339(),
+        "ttl_seconds": 300,
+        "expires_at": (now + chrono::Duration::seconds(300)).to_rfc3339(),
+    });
+    std::fs::write(rev_dir.join("motd.json"), serde_json::to_string_pretty(&meta)?)?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m terminal ghost (motd)");
+
+    // Dispatch to VS Code ghost via Unix socket
+    let vscode_sock = rev_dir.join("vscode.sock");
+    dispatch_socket_ghost(&vscode_sock, "vscode", &card_id, &cwd, &project_name, &summary, next_step)?;
+
+    // Dispatch to Slack ghost via Unix socket
+    let slack_sock = rev_dir.join("slack.sock");
+    dispatch_socket_ghost(&slack_sock, "slack", &card_id, &cwd, &project_name, &summary, next_step)?;
+
+    // Dispatch to Obsidian ghost (write state file)
+    let card_json = serde_json::json!({
+        "type": "inject",
+        "card": {
+            "id": card_id,
+            "project_dir": cwd,
+            "project_name": project_name,
+            "summary": summary,
+            "next_step": next_step,
+            "ttl_seconds": 300,
+        }
+    });
+
+    let obsidian_state = rev_dir.join("obsidian-state.json");
+    std::fs::write(&obsidian_state, serde_json::to_string_pretty(&card_json)?)?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m obsidian ghost (state file)");
+
+    // Dispatch to browser ghost (write state file)
+    let browser_state = rev_dir.join("browser-state.json");
+    std::fs::write(&browser_state, serde_json::to_string_pretty(&card_json)?)?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m browser ghost (state file)");
+
+    println!("\x1b[2m\u{2502}\x1b[0m");
+    println!("\x1b[2m\u{2502}\x1b[0m card id: \x1b[2m{card_id}\x1b[0m");
+    println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500} all ghosts dispatched \u{2500}\u{2500}\u{2500}\x1b[0m");
+    println!();
+    println!("  Open a new terminal to see the terminal ghost.");
+    println!("  Check VS Code, browser, Obsidian if those channels are configured.");
+    println!("  Ghosts will self-destruct after 5 minutes of activity.");
+
+    Ok(())
+}
+
+/// Send a context card to a ghost channel via Unix socket (shared by vscode + slack test dispatch)
+fn dispatch_socket_ghost(
+    sock_path: &Path,
+    name: &str,
+    card_id: &str,
+    cwd: &str,
+    project_name: &str,
+    summary: &str,
+    next_step: &str,
+) -> Result<()> {
+    if sock_path.exists() {
+        let msg = serde_json::json!({
+            "type": "inject",
+            "card": {
+                "id": card_id,
+                "project_dir": cwd,
+                "project_name": project_name,
+                "summary": summary,
+                "next_step": next_step,
+                "ttl_seconds": 300,
+            }
+        });
+        match std::os::unix::net::UnixStream::connect(sock_path) {
+            Ok(mut stream) => {
+                use std::io::Write;
+                let payload = serde_json::to_string(&msg)? + "\n";
+                stream.write_all(payload.as_bytes())?;
+                println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m {name} ghost (socket)");
+            }
+            Err(e) => {
+                println!(
+                    "\x1b[2m\u{2502}\x1b[0m \x1b[33m~\x1b[0m {name} ghost skipped (socket error: {e})"
+                );
+            }
+        }
+    } else {
+        println!("\x1b[2m\u{2502}\x1b[0m \x1b[2m-\x1b[0m {name} ghost (no socket)");
+    }
+    Ok(())
+}
+
+// ─── Utilities ───────────────────────────────────────────────────────
+
+fn format_age(dt: DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let elapsed = now.signed_duration_since(dt);
+    let secs = elapsed.num_seconds().max(0);
+
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}min", secs / 60)
+    } else if secs < 86400 {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        if m > 0 {
+            format!("{h}h {m}min")
+        } else {
+            format!("{h}h")
+        }
+    } else {
+        let d = secs / 86400;
+        let h = (secs % 86400) / 3600;
+        if h > 0 {
+            format!("{d}d {h}h")
+        } else {
+            format!("{d}d")
+        }
+    }
+}
+
+/// Try to find the REVENANT project root (where Cargo.toml lives)
+fn find_project_root() -> Result<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent().map(|p| p.to_path_buf());
+        for _ in 0..5 {
+            if let Some(ref d) = dir {
+                if d.join("Cargo.toml").exists() || d.join("ghosts").exists() {
+                    return Ok(d.clone());
+                }
+                dir = d.parent().map(|p| p.to_path_buf());
+            } else {
+                break;
+            }
+        }
+    }
+    bail!("could not find REVENANT project root")
+}
+
+// ─── Main ────────────────────────────────────────────────────────────
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Init => cmd_init(),
+        Commands::Status => cmd_status(),
+        Commands::History { project, count } => cmd_history(project, count),
+        Commands::Off => cmd_off(),
+        Commands::On => cmd_on(),
+        Commands::Forget { project, all } => cmd_forget(project, all),
+        Commands::Setup { channel } => cmd_setup(&channel),
+        Commands::Test => cmd_test(),
+    }
+}

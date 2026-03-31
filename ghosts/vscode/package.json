@@ -1,0 +1,61 @@
+{
+  "name": "revenant-ghost",
+  "displayName": "REVENANT Ghost",
+  "description": "Cognitive context restoration — ghost annotations that show where you left off",
+  "version": "0.1.0",
+  "publisher": "revenant",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "revenant.showGhost",
+        "title": "REVENANT: Show Context Ghost"
+      },
+      {
+        "command": "revenant.clearGhost",
+        "title": "REVENANT: Clear Ghost Annotations"
+      },
+      {
+        "command": "revenant.history",
+        "title": "REVENANT: View Context History"
+      }
+    ],
+    "configuration": {
+      "title": "REVENANT Ghost",
+      "properties": {
+        "revenant.socketPath": {
+          "type": "string",
+          "default": "~/.revenant/vscode.sock",
+          "description": "Unix socket path for daemon communication"
+        },
+        "revenant.ghostColor": {
+          "type": "string",
+          "default": "#4EC9B0",
+          "description": "Color for ghost annotation text"
+        },
+        "revenant.ghostOpacity": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0.1,
+          "maximum": 1.0,
+          "description": "Opacity of ghost annotations"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./tsconfig.json",
+    "watch": "tsc -watch -p ./tsconfig.json",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

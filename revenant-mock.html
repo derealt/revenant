@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>REVENANT — Live Scenario</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+
+  :root {
+    --bg: #1e1e1e;
+    --bg-darker: #181818;
+    --bg-sidebar: #252526;
+    --bg-tab: #2d2d2d;
+    --bg-active: #1e1e1e;
+    --text: #d4d4d4;
+    --text-dim: #808080;
+    --keyword: #569cd6;
+    --string: #ce9178;
+    --comment: #6a9955;
+    --fn: #dcdcaa;
+    --type: #4ec9b0;
+    --number: #b5cea8;
+    --var: #9cdcfe;
+    --accent: #007acc;
+    --ghost-bg: rgba(78,234,219,0.06);
+    --ghost-border: rgba(78,234,219,0.2);
+    --ghost-text: #4eeadb;
+    --ghost-body: rgba(200,220,218,0.85);
+    --terminal-bg: #0a0a0a;
+    --terminal-text: #cccccc;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Inter', -apple-system, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--sans); background: #f0f0f0; color: #1d1d1f; -webkit-font-smoothing: antialiased; }
+
+  /* Page layout */
+  .page { max-width: 1200px; margin: 0 auto; padding: 40px 32px 80px; }
+
+  .scene-label {
+    font: 700 11px/1 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #86868b;
+    margin-bottom: 12px;
+  }
+
+  .scene-title {
+    font: 600 28px/1.2 var(--sans);
+    color: #1d1d1f;
+    margin-bottom: 6px;
+  }
+
+  .scene-desc {
+    font: 400 15px/1.6 var(--sans);
+    color: #424245;
+    margin-bottom: 32px;
+    max-width: 700px;
+  }
+
+  .scene-time {
+    display: inline-block;
+    font: 500 11px/1 var(--mono);
+    color: #0a8a7e;
+    background: rgba(10,138,126,0.08);
+    padding: 4px 12px;
+    border-radius: 20px;
+    margin-bottom: 24px;
+  }
+
+  .divider {
+    height: 1px;
+    background: rgba(0,0,0,0.08);
+    margin: 48px 0;
+  }
+
+  .arrow-down {
+    text-align: center;
+    margin: 32px 0;
+    font-size: 24px;
+    color: #86868b;
+  }
+
+  /* ═══ VS CODE MOCK ═══ */
+  .vscode {
+    background: var(--bg);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+    margin-bottom: 24px;
+  }
+
+  .vscode-titlebar {
+    height: 36px;
+    background: var(--bg-darker);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .traffic-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+  }
+  .dot-red { background: #ff5f57; }
+  .dot-yellow { background: #febc2e; }
+  .dot-green { background: #28c840; }
+
+  .vscode-titlebar-text {
+    font: 400 12px/1 var(--sans);
+    color: var(--text-dim);
+    margin-left: 8px;
+    flex: 1;
+    text-align: center;
+  }
+
+  .vscode-body {
+    display: flex;
+    min-height: 420px;
+  }
+
+  /* Sidebar */
+  .vscode-sidebar {
+    width: 200px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid #333;
+    padding: 8px 0;
+    font: 400 12px/1.6 var(--mono);
+    color: var(--text-dim);
+  }
+
+  .sidebar-section {
+    padding: 4px 12px;
+    font: 600 10px/1 var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #555;
+    margin: 8px 0 4px;
+  }
+
+  .sidebar-file {
+    padding: 2px 12px 2px 24px;
+    cursor: default;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  .sidebar-file.active {
+    background: rgba(255,255,255,0.05);
+    color: var(--text);
+  }
+
+  /* Tabs */
+  .vscode-tabs {
+    display: flex;
+    background: var(--bg-tab);
+    border-bottom: 1px solid #333;
+  }
+
+  .vscode-tab {
+    padding: 8px 16px;
+    font: 400 12px/1 var(--sans);
+    color: var(--text-dim);
+    border-right: 1px solid #333;
+    cursor: default;
+  }
+  .vscode-tab.active {
+    background: var(--bg-active);
+    color: var(--text);
+    border-bottom: 1px solid var(--accent);
+  }
+
+  /* Editor */
+  .vscode-editor {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .editor-content {
+    flex: 1;
+    padding: 0;
+    overflow: hidden;
+    font: 400 13px/1.65 var(--mono);
+    position: relative;
+  }
+
+  .line {
+    display: flex;
+    padding: 0 16px;
+    min-height: 21px;
+  }
+
+  .line-num {
+    width: 40px;
+    text-align: right;
+    padding-right: 16px;
+    color: #555;
+    user-select: none;
+    flex-shrink: 0;
+    font-size: 12px;
+  }
+
+  .line-code {
+    flex: 1;
+    white-space: pre;
+  }
+
+  .kw { color: var(--keyword); }
+  .str { color: var(--string); }
+  .cm { color: var(--comment); }
+  .fn { color: var(--fn); }
+  .tp { color: var(--type); }
+  .nm { color: var(--number); }
+  .vr { color: var(--var); }
+  .op { color: var(--text); }
+
+  /* Ghost annotation */
+  .ghost-banner {
+    margin: 8px 16px;
+    padding: 10px 16px;
+    background: var(--ghost-bg);
+    border: 1px solid var(--ghost-border);
+    border-radius: 6px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    position: relative;
+    animation: ghostAppear 0.8s ease;
+  }
+
+  @keyframes ghostAppear {
+    0% { opacity: 0; transform: translateY(-4px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+
+  .ghost-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .ghost-content {
+    flex: 1;
+  }
+
+  .ghost-label {
+    font: 600 10px/1 var(--mono);
+    color: var(--ghost-text);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 4px;
+  }
+
+  .ghost-text {
+    font: 400 12px/1.5 var(--sans);
+    color: var(--ghost-body);
+  }
+
+  .ghost-meta {
+    font: 400 10px/1 var(--mono);
+    color: rgba(78,234,219,0.4);
+    margin-top: 6px;
+  }
+
+  .ghost-fade {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    font: 400 9px/1 var(--mono);
+    color: rgba(78,234,219,0.3);
+  }
+
+  .ghost-dismiss {
+    position: absolute;
+    top: 8px;
+    right: 36px;
+    font: 400 10px/1 var(--mono);
+    color: rgba(78,234,219,0.3);
+    cursor: pointer;
+    border: none;
+    background: none;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .ghost-dismiss:hover { color: var(--ghost-text); background: rgba(78,234,219,0.08); }
+
+  /* Highlight line */
+  .line.highlight {
+    background: rgba(78,234,219,0.04);
+  }
+
+  /* ═══ TERMINAL MOCK ═══ */
+  .terminal {
+    background: var(--terminal-bg);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+    margin-bottom: 24px;
+  }
+
+  .terminal-titlebar {
+    height: 36px;
+    background: #1a1a1a;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .terminal-titlebar-text {
+    font: 400 12px/1 var(--sans);
+    color: #666;
+    flex: 1;
+    text-align: center;
+  }
+
+  .terminal-body {
+    padding: 16px;
+    font: 400 13px/1.65 var(--mono);
+    color: var(--terminal-text);
+    min-height: 200px;
+  }
+
+  .term-prompt { color: #6a9955; }
+  .term-path { color: #569cd6; }
+  .term-cmd { color: #d4d4d4; }
+  .term-ghost {
+    display: block;
+    margin: 8px 0 12px;
+    padding: 8px 12px;
+    background: rgba(78,234,219,0.06);
+    border-left: 2px solid rgba(78,234,219,0.3);
+    border-radius: 0 4px 4px 0;
+    color: rgba(78,234,219,0.7);
+    font-size: 12px;
+    line-height: 1.5;
+    animation: ghostAppear 0.8s ease;
+  }
+  .term-ghost-label { color: var(--ghost-text); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; }
+  .term-ghost-meta { color: rgba(78,234,219,0.3); font-size: 10px; margin-top: 4px; }
+  .term-output { color: #888; }
+
+  /* ═══ SLACK MOCK ═══ */
+  .slack {
+    background: #fff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+    border: 1px solid rgba(0,0,0,0.08);
+    margin-bottom: 24px;
+  }
+
+  .slack-titlebar {
+    height: 44px;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    border-bottom: 1px solid #e8e8e8;
+    gap: 8px;
+  }
+
+  .slack-channel { font: 600 14px/1 var(--sans); color: #1d1c1d; }
+  .slack-hash { color: #888; margin-right: 2px; }
+
+  .slack-body {
+    padding: 16px;
+    min-height: 140px;
+  }
+
+  .slack-msg {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .slack-avatar {
+    width: 36px; height: 36px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #0a8a7e, #087a6e);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 700 12px/1 var(--mono);
+    color: #fff;
+    flex-shrink: 0;
+  }
+
+  .slack-msg-body { flex: 1; }
+
+  .slack-msg-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .slack-msg-name { font: 700 14px/1 var(--sans); color: #1d1c1d; }
+  .slack-msg-badge {
+    font: 500 10px/1 var(--sans);
+    color: #0a8a7e;
+    background: rgba(10,138,126,0.08);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .slack-msg-time { font: 400 11px/1 var(--sans); color: #888; }
+
+  .slack-msg-text {
+    font: 400 14px/1.5 var(--sans);
+    color: #1d1c1d;
+  }
+
+  .slack-msg-text code {
+    background: #f0f0f0;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font: 400 12px/1 var(--mono);
+    color: #c7254e;
+  }
+
+  .slack-ephemeral {
+    font: 400 11px/1 var(--sans);
+    color: #888;
+    margin-top: 6px;
+    font-style: italic;
+  }
+
+  /* ═══ BROWSER MOCK ═══ */
+  .browser {
+    background: #fff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+    border: 1px solid rgba(0,0,0,0.08);
+    margin-bottom: 24px;
+  }
+
+  .browser-bar {
+    height: 44px;
+    background: #f5f5f5;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .browser-url {
+    flex: 1;
+    height: 28px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 14px;
+    padding: 0 14px;
+    font: 400 12px/28px var(--sans);
+    color: #333;
+  }
+
+  .browser-body {
+    padding: 0;
+    min-height: 200px;
+    position: relative;
+  }
+
+  .browser-ghost {
+    padding: 10px 20px;
+    background: rgba(10,138,126,0.04);
+    border-bottom: 1px solid rgba(10,138,126,0.12);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    animation: ghostAppear 0.8s ease;
+  }
+
+  .browser-ghost-icon {
+    font-size: 14px;
+  }
+
+  .browser-ghost-text {
+    font: 400 13px/1.4 var(--sans);
+    color: #0a8a7e;
+    flex: 1;
+  }
+
+  .browser-ghost-dismiss {
+    font: 400 11px/1 var(--sans);
+    color: #0a8a7e;
+    opacity: 0.5;
+    cursor: pointer;
+    border: none;
+    background: none;
+  }
+
+  .browser-content {
+    padding: 32px 48px;
+  }
+
+  .browser-content h1 {
+    font: 700 28px/1.3 var(--sans);
+    color: #1d1d1f;
+    margin-bottom: 12px;
+  }
+
+  .browser-content p {
+    font: 400 15px/1.7 var(--sans);
+    color: #424245;
+    margin-bottom: 12px;
+    max-width: 680px;
+  }
+
+  /* ═══ SCENARIO FLOW ═══ */
+  .scenario-step {
+    margin-bottom: 48px;
+  }
+
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .step-num {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: #1d1d1f;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 600 14px/1 var(--sans);
+    flex-shrink: 0;
+  }
+
+  .step-title {
+    font: 600 18px/1 var(--sans);
+    color: #1d1d1f;
+  }
+
+  .step-desc {
+    font: 400 14px/1.6 var(--sans);
+    color: #424245;
+    margin-bottom: 16px;
+    margin-left: 44px;
+  }
+
+  .step-mock {
+    margin-left: 44px;
+  }
+
+  /* No-ghost state label */
+  .no-ghost-label {
+    font: 500 10px/1 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #86868b;
+    background: #f0f0f0;
+    padding: 4px 10px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 12px;
+  }
+
+  .with-ghost-label {
+    font: 500 10px/1 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #0a8a7e;
+    background: rgba(10,138,126,0.08);
+    padding: 4px 10px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="scene-label">Real-time Scenario</div>
+  <h1 class="scene-title">A day with REVENANT</h1>
+  <p class="scene-desc">You're a backend engineer working on a payments service. This is what happens when you context-switch three times in one day — with REVENANT running silently in the background.</p>
+
+  <div class="divider"></div>
+
+  <!-- ═══ SCENE 1: MORNING WORK ═══ -->
+  <div class="scenario-step">
+    <div class="scene-time">9:14 AM — Deep in the code</div>
+    <div class="step-header">
+      <div class="step-num">1</div>
+      <div class="step-title">You're debugging a race condition</div>
+    </div>
+    <p class="step-desc">You've been tracing a bug for 40 minutes. You found it — the WebSocket reconnect timer isn't cleared on successful connection, causing duplicate reconnections under network jitter. You're about to write the fix.</p>
+
+    <div class="step-mock">
+      <div class="no-ghost-label">Your editor — no ghost (you never left)</div>
+      <div class="vscode">
+        <div class="vscode-titlebar">
+          <div class="traffic-dot dot-red"></div>
+          <div class="traffic-dot dot-yellow"></div>
+          <div class="traffic-dot dot-green"></div>
+          <div class="vscode-titlebar-text">websocket.ts — payments-service</div>
+        </div>
+        <div class="vscode-body">
+          <div class="vscode-sidebar">
+            <div class="sidebar-section">Explorer</div>
+            <div class="sidebar-file">src/</div>
+            <div class="sidebar-file">  api/</div>
+            <div class="sidebar-file">  ws/</div>
+            <div class="sidebar-file active">    websocket.ts</div>
+            <div class="sidebar-file">    handler.ts</div>
+            <div class="sidebar-file">  payments/</div>
+            <div class="sidebar-file">test/</div>
+            <div class="sidebar-file">  ws/</div>
+            <div class="sidebar-file">    reconnect.test.ts</div>
+          </div>
+          <div class="vscode-editor">
+            <div class="vscode-tabs">
+              <div class="vscode-tab active">websocket.ts</div>
+              <div class="vscode-tab">reconnect.test.ts</div>
+              <div class="vscode-tab">handler.ts</div>
+            </div>
+            <div class="editor-content">
+              <div class="line"><span class="line-num">38</span><span class="line-code"><span class="kw">class</span> <span class="tp">WebSocketClient</span> {</span></div>
+              <div class="line"><span class="line-num">39</span><span class="line-code">  <span class="kw">private</span> <span class="vr">reconnectTimer</span>: <span class="tp">ReturnType</span>&lt;<span class="kw">typeof</span> <span class="fn">setTimeout</span>&gt; | <span class="kw">null</span> = <span class="kw">null</span>;</span></div>
+              <div class="line"><span class="line-num">40</span><span class="line-code">  <span class="kw">private</span> <span class="vr">retryCount</span> = <span class="nm">0</span>;</span></div>
+              <div class="line"><span class="line-num">41</span><span class="line-code"></span></div>
+              <div class="line"><span class="line-num">42</span><span class="line-code">  <span class="kw">async</span> <span class="fn">connect</span>(): <span class="tp">Promise</span>&lt;<span class="kw">void</span>&gt; {</span></div>
+              <div class="line"><span class="line-num">43</span><span class="line-code">    <span class="kw">try</span> {</span></div>
+              <div class="line"><span class="line-num">44</span><span class="line-code">      <span class="kw">this</span>.<span class="vr">ws</span> = <span class="kw">new</span> <span class="tp">WebSocket</span>(<span class="kw">this</span>.<span class="vr">url</span>);</span></div>
+              <div class="line"><span class="line-num">45</span><span class="line-code">      <span class="kw">await</span> <span class="kw">this</span>.<span class="fn">waitForOpen</span>();</span></div>
+              <div class="line highlight"><span class="line-num">46</span><span class="line-code">      <span class="cm">// BUG: reconnectTimer not cleared here</span></span></div>
+              <div class="line highlight"><span class="line-num">47</span><span class="line-code">      <span class="cm">// If connect() succeeds while a retry is pending,</span></span></div>
+              <div class="line highlight"><span class="line-num">48</span><span class="line-code">      <span class="cm">// the timer fires and creates a duplicate connection</span></span></div>
+              <div class="line"><span class="line-num">49</span><span class="line-code">      <span class="kw">this</span>.<span class="vr">retryCount</span> = <span class="nm">0</span>;</span></div>
+              <div class="line"><span class="line-num">50</span><span class="line-code">      <span class="kw">this</span>.<span class="fn">emit</span>(<span class="str">'connected'</span>);</span></div>
+              <div class="line"><span class="line-num">51</span><span class="line-code">    } <span class="kw">catch</span> (<span class="vr">err</span>) {</span></div>
+              <div class="line"><span class="line-num">52</span><span class="line-code">      <span class="kw">this</span>.<span class="fn">scheduleReconnect</span>();</span></div>
+              <div class="line"><span class="line-num">53</span><span class="line-code">    }</span></div>
+              <div class="line"><span class="line-num">54</span><span class="line-code">  }</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">&#8595; 9:15 AM — Calendar notification: "Sprint Planning" &#8595;</div>
+
+  <!-- ═══ SCENE 2: YOU LEAVE ═══ -->
+  <div class="scenario-step">
+    <div class="scene-time">9:15 AM — You close the laptop for a 1-hour meeting</div>
+    <div class="step-header">
+      <div class="step-num">2</div>
+      <div class="step-title">REVENANT snapshots your context (invisible)</div>
+    </div>
+    <p class="step-desc">You didn't do anything. REVENANT detected the calendar event, saw you switch away, and captured: 3 open files, cursor at line 46, recent git diff showing no staged changes, last terminal command was <code style="background:#f0f0f0;padding:2px 5px;border-radius:3px;font-family:var(--mono);font-size:12px;">npm test -- --grep "reconnect"</code> (2 tests failing). It compressed this into a context card and stored it.</p>
+  </div>
+
+  <div class="arrow-down">&#8595; 1 hour passes. Sprint planning. You talked about 6 different tickets. &#8595;</div>
+
+  <!-- ═══ SCENE 3: YOU RETURN — VS CODE ═══ -->
+  <div class="scenario-step">
+    <div class="scene-time">10:22 AM — You open VS Code</div>
+    <div class="step-header">
+      <div class="step-num">3</div>
+      <div class="step-title">The ghost appears in your editor</div>
+    </div>
+    <p class="step-desc">VS Code reopens with your files. But now there's something at the top — a faint teal annotation that wasn't there before. It takes you 8 seconds to read it. You're back.</p>
+
+    <div class="step-mock">
+      <div class="with-ghost-label">Your editor — ghost active</div>
+      <div class="vscode">
+        <div class="vscode-titlebar">
+          <div class="traffic-dot dot-red"></div>
+          <div class="traffic-dot dot-yellow"></div>
+          <div class="traffic-dot dot-green"></div>
+          <div class="vscode-titlebar-text">websocket.ts — payments-service</div>
+        </div>
+        <div class="vscode-body">
+          <div class="vscode-sidebar">
+            <div class="sidebar-section">Explorer</div>
+            <div class="sidebar-file">src/</div>
+            <div class="sidebar-file">  api/</div>
+            <div class="sidebar-file">  ws/</div>
+            <div class="sidebar-file active">    websocket.ts</div>
+            <div class="sidebar-file">    handler.ts</div>
+            <div class="sidebar-file">  payments/</div>
+            <div class="sidebar-file">test/</div>
+            <div class="sidebar-file">  ws/</div>
+            <div class="sidebar-file">    reconnect.test.ts</div>
+          </div>
+          <div class="vscode-editor">
+            <div class="vscode-tabs">
+              <div class="vscode-tab active">websocket.ts</div>
+              <div class="vscode-tab">reconnect.test.ts</div>
+              <div class="vscode-tab">handler.ts</div>
+            </div>
+            <div class="editor-content">
+              <!-- GHOST ANNOTATION -->
+              <div class="ghost-banner">
+                <div class="ghost-icon">&#9776;</div>
+                <div class="ghost-content">
+                  <div class="ghost-label">REVENANT</div>
+                  <div class="ghost-text">You were fixing a race condition in <strong>WebSocketClient.connect()</strong>. The reconnect timer at line 47 isn't cleared on successful connection — causing duplicate connections under network jitter. <strong>Next:</strong> add <code style="background:rgba(78,234,219,0.1);padding:1px 4px;border-radius:2px;font-family:var(--mono);font-size:11px;color:#4eeadb;">clearTimeout(this.reconnectTimer)</code> before line 49, then run the 2 failing tests in <code style="background:rgba(78,234,219,0.1);padding:1px 4px;border-radius:2px;font-family:var(--mono);font-size:11px;color:#4eeadb;">reconnect.test.ts</code>.</div>
+                  <div class="ghost-meta">1hr 7min ago &middot; auto-dissolves in 5 min</div>
+                </div>
+                <button class="ghost-dismiss">dismiss</button>
+                <div class="ghost-fade">5:00</div>
+              </div>
+
+              <div class="line"><span class="line-num">38</span><span class="line-code"><span class="kw">class</span> <span class="tp">WebSocketClient</span> {</span></div>
+              <div class="line"><span class="line-num">39</span><span class="line-code">  <span class="kw">private</span> <span class="vr">reconnectTimer</span>: <span class="tp">ReturnType</span>&lt;<span class="kw">typeof</span> <span class="fn">setTimeout</span>&gt; | <span class="kw">null</span> = <span class="kw">null</span>;</span></div>
+              <div class="line"><span class="line-num">40</span><span class="line-code">  <span class="kw">private</span> <span class="vr">retryCount</span> = <span class="nm">0</span>;</span></div>
+              <div class="line"><span class="line-num">41</span><span class="line-code"></span></div>
+              <div class="line"><span class="line-num">42</span><span class="line-code">  <span class="kw">async</span> <span class="fn">connect</span>(): <span class="tp">Promise</span>&lt;<span class="kw">void</span>&gt; {</span></div>
+              <div class="line"><span class="line-num">43</span><span class="line-code">    <span class="kw">try</span> {</span></div>
+              <div class="line"><span class="line-num">44</span><span class="line-code">      <span class="kw">this</span>.<span class="vr">ws</span> = <span class="kw">new</span> <span class="tp">WebSocket</span>(<span class="kw">this</span>.<span class="vr">url</span>);</span></div>
+              <div class="line"><span class="line-num">45</span><span class="line-code">      <span class="kw">await</span> <span class="kw">this</span>.<span class="fn">waitForOpen</span>();</span></div>
+              <div class="line highlight"><span class="line-num">46</span><span class="line-code">      <span class="cm">// BUG: reconnectTimer not cleared here</span></span></div>
+              <div class="line highlight"><span class="line-num">47</span><span class="line-code">      <span class="cm">// If connect() succeeds while a retry is pending,</span></span></div>
+              <div class="line highlight"><span class="line-num">48</span><span class="line-code">      <span class="cm">// the timer fires and creates a duplicate connection</span></span></div>
+              <div class="line"><span class="line-num">49</span><span class="line-code">      <span class="kw">this</span>.<span class="vr">retryCount</span> = <span class="nm">0</span>;</span></div>
+              <div class="line"><span class="line-num">50</span><span class="line-code">      <span class="kw">this</span>.<span class="fn">emit</span>(<span class="str">'connected'</span>);</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SCENE 4: TERMINAL ═══ -->
+  <div class="scenario-step">
+    <div class="scene-time">10:22 AM — You open a terminal</div>
+    <div class="step-header">
+      <div class="step-num">4</div>
+      <div class="step-title">The ghost is in your terminal too</div>
+    </div>
+    <p class="step-desc">You open a new terminal tab. Before the prompt appears, REVENANT's note is already there.</p>
+
+    <div class="step-mock">
+      <div class="with-ghost-label">Your terminal — ghost active</div>
+      <div class="terminal">
+        <div class="terminal-titlebar">
+          <div class="traffic-dot dot-red"></div>
+          <div class="traffic-dot dot-yellow"></div>
+          <div class="traffic-dot dot-green"></div>
+          <div class="terminal-titlebar-text">zsh — payments-service</div>
+        </div>
+        <div class="terminal-body">
+          <div class="term-ghost">
+            <span class="term-ghost-label">REVENANT</span><br>
+            Race condition in ws/websocket.ts:47 — reconnect timer not cleared on success.<br>
+            Last: <span style="color:rgba(78,234,219,0.9)">npm test -- --grep "reconnect"</span> → 2 failing<br>
+            Next: add clearTimeout before retryCount reset, re-run tests.<br>
+            <span class="term-ghost-meta">1hr 7min ago &middot; dissolves in 5 min</span>
+          </div>
+          <span class="term-prompt">&#10095;</span> <span class="term-path">~/payments-service</span> <span class="term-cmd">&#9646;</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SCENE 5: SLACK ═══ -->
+  <div class="scenario-step">
+    <div class="scene-time">10:23 AM — You check Slack</div>
+    <div class="step-header">
+      <div class="step-num">5</div>
+      <div class="step-title">The ghost left a Slack message (only you can see it)</div>
+    </div>
+    <p class="step-desc">In the #payments-eng channel, an ephemeral message from REVENANT. Visible only to you. Nobody else on the team sees it.</p>
+
+    <div class="step-mock">
+      <div class="with-ghost-label">Slack — ephemeral ghost</div>
+      <div class="slack">
+        <div class="slack-titlebar">
+          <span class="slack-hash">#</span>
+          <span class="slack-channel">payments-eng</span>
+        </div>
+        <div class="slack-body">
+          <div class="slack-msg">
+            <div class="slack-avatar">R</div>
+            <div class="slack-msg-body">
+              <div class="slack-msg-header">
+                <span class="slack-msg-name">Revenant</span>
+                <span class="slack-msg-badge">ghost</span>
+                <span class="slack-msg-time">10:22 AM</span>
+              </div>
+              <div class="slack-msg-text">
+                Picking up where you left off: race condition in <code>WebSocketClient.connect()</code> — the reconnect timer isn't cleared on successful connection. Two tests failing in <code>reconnect.test.ts</code>. You were about to add <code>clearTimeout</code> at line 47.
+              </div>
+              <div class="slack-ephemeral">Only visible to you &middot; disappears in 5 minutes</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SCENE 6: LATER — BROWSER ═══ -->
+  <div class="scenario-step">
+    <div class="scene-time">2:45 PM — After lunch, different task entirely</div>
+    <div class="step-header">
+      <div class="step-num">6</div>
+      <div class="step-title">You switched to a different project. Now you're back to research.</div>
+    </div>
+    <p class="step-desc">You spent lunchtime reading a blog post about token bucket rate limiting for the API gateway project. You left to grab coffee. When you open Chrome, the ghost is on the page you were reading.</p>
+
+    <div class="step-mock">
+      <div class="with-ghost-label">Browser — ghost banner</div>
+      <div class="browser">
+        <div class="browser-bar">
+          <div class="traffic-dot dot-red"></div>
+          <div class="traffic-dot dot-yellow"></div>
+          <div class="traffic-dot dot-green"></div>
+          <div class="browser-url">https://blog.cloudflare.com/api-gateway-rate-limiting-token-bucket</div>
+        </div>
+        <div class="browser-body">
+          <div class="browser-ghost">
+            <div class="browser-ghost-icon">&#9776;</div>
+            <div class="browser-ghost-text">
+              <strong>REVENANT:</strong> You were reading about token bucket vs sliding window for the API gateway. You got to the section on burst handling. The key insight was: token bucket allows controlled bursts while sliding window doesn't.
+            </div>
+            <button class="browser-ghost-dismiss">dismiss &times;</button>
+          </div>
+          <div class="browser-content">
+            <h1>Rate Limiting at Scale: Token Bucket vs. Sliding Window</h1>
+            <p>When building an API gateway that handles millions of requests per second, choosing the right rate limiting algorithm isn't just an implementation detail — it's an architectural decision that affects every downstream service...</p>
+            <p>The token bucket algorithm works by maintaining a "bucket" of tokens that refills at a constant rate. Each request consumes one token. When the bucket is empty, requests are rejected until tokens refill...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ═══ SUMMARY ═══ -->
+  <div style="text-align:center; padding: 40px 0;">
+    <div class="scene-label">What just happened</div>
+    <h2 style="font:300 32px/1.2 var(--sans);color:#1d1d1f;margin-bottom:16px;">Three context switches. Zero time lost.</h2>
+    <p style="font:400 15px/1.7 var(--sans);color:#424245;max-width:560px;margin:0 auto 32px;">
+      REVENANT captured your cognitive state three times. Restored it three times. In three different tools. You never opened an app. You never wrote a note. You never asked "where was I?"
+    </p>
+    <p style="font:400 15px/1.7 var(--sans);color:#424245;max-width:560px;margin:0 auto;">
+      The ghosts appeared. You read them. You were back in flow.<br>Five minutes later, they vanished. As if they were never there.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>

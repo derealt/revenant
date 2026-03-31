@@ -1,0 +1,23 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+out/
+*.vsix
+
+# Go
+revenant-slack
+
+# OS
+.DS_Store
+*.swp
+*.swo
+
+# Runtime
+*.db
+*.pid
+*.sock
+*.log

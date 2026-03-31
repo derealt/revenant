@@ -1,0 +1,16 @@
+{
+  "name": "revenant-ghost-obsidian",
+  "version": "0.1.0",
+  "description": "REVENANT ghost annotations for Obsidian — transient callout blocks showing cognitive context",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && esbuild main.ts --bundle --outfile=main.js --external:obsidian --format=cjs",
+    "dev": "esbuild main.ts --bundle --outfile=main.js --external:obsidian --format=cjs --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "latest",
+    "typescript": "^5.3.0"
+  }
+}
