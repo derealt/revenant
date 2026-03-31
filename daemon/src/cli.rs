@@ -63,10 +63,38 @@ enum Commands {
         all: bool,
     },
 
-    /// Setup a ghost channel (install extension/plugin/bot)
+    /// Setup a ghost channel or LLM compression
     Setup {
-        /// Channel to set up: vscode, browser, obsidian, slack
+        /// What to set up: llm, vscode, browser, obsidian, slack
         channel: String,
+
+        /// API key (for llm setup)
+        #[arg(long)]
+        key: Option<String>,
+
+        /// Provider: claude, openai, ollama (for llm setup)
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Model name (for llm setup)
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Vault path (for obsidian setup)
+        #[arg(long)]
+        vault: Option<String>,
+
+        /// Bot token (for slack setup)
+        #[arg(long)]
+        token: Option<String>,
+
+        /// Slack user ID (for slack setup)
+        #[arg(long)]
+        user: Option<String>,
+
+        /// Slack channel ID (for slack setup)
+        #[arg(long, name = "channel-id")]
+        channel_id: Option<String>,
     },
 
     /// Inject a synthetic context card and dispatch to all enabled ghosts
@@ -726,8 +754,134 @@ fn cmd_forget(project: Option<String>, all: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_setup(channel: &str) -> Result<()> {
+fn read_stdin_line(prompt: &str) -> String {
+    eprint!("{}", prompt);
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).unwrap_or_default();
+    input.trim().to_string()
+}
+
+fn update_config_value(key_path: &str, value: &str) -> Result<()> {
+    let config = config_file();
+    let contents = std::fs::read_to_string(&config).unwrap_or_default();
+    let mut lines: Vec<String> = contents.lines().map(String::from).collect();
+
+    // Simple key=value replacement in TOML
+    let parts: Vec<&str> = key_path.split('.').collect();
+    let section = if parts.len() > 1 { parts[..parts.len()-1].join(".") } else { String::new() };
+    let key = parts.last().unwrap_or(&"");
+
+    let section_header = if section.is_empty() { String::new() } else { format!("[{}]", section) };
+    let mut in_section = section.is_empty();
+    let mut found = false;
+
+    for line in lines.iter_mut() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_section = trimmed == section_header;
+        }
+        if in_section && trimmed.starts_with(&format!("{} =", key)) || in_section && trimmed.starts_with(&format!("{}=", key)) {
+            *line = format!("{} = {}", key, value);
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        // Append to section or create section
+        if !section.is_empty() {
+            let section_exists = lines.iter().any(|l| l.trim() == section_header);
+            if !section_exists {
+                lines.push(String::new());
+                lines.push(section_header);
+            }
+        }
+        lines.push(format!("{} = {}", key, value));
+    }
+
+    std::fs::write(&config, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
+fn cmd_setup(
+    channel: &str,
+    key: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    vault: Option<String>,
+    token: Option<String>,
+    user: Option<String>,
+    channel_id: Option<String>,
+) -> Result<()> {
     match channel {
+        "llm" => {
+            println!("\x1b[2m┌─── LLM Compression Setup ───\x1b[0m");
+            println!("\x1b[2m│\x1b[0m");
+            println!("\x1b[2m│\x1b[0m LLM compression turns raw signals into natural-language");
+            println!("\x1b[2m│\x1b[0m context cards. Without it, cards are rule-based (still works,");
+            println!("\x1b[2m│\x1b[0m just less eloquent). Your data never touches REVENANT servers");
+            println!("\x1b[2m│\x1b[0m — the API call goes directly from your machine to the provider.");
+            println!("\x1b[2m│\x1b[0m");
+            println!("\x1b[2m│\x1b[0m Providers:");
+            println!("\x1b[2m│\x1b[0m   \x1b[36mclaude\x1b[0m   — Best quality. ~$0.50/month (Haiku) or ~$2/month (Sonnet)");
+            println!("\x1b[2m│\x1b[0m   \x1b[36mopenai\x1b[0m   — Good quality. ~$0.30/month (GPT-4o-mini)");
+            println!("\x1b[2m│\x1b[0m   \x1b[36mollama\x1b[0m   — Free. Runs locally. Needs ~4GB disk.");
+            println!("\x1b[2m│\x1b[0m");
+
+            let prov = provider.unwrap_or_else(|| read_stdin_line("\x1b[2m│\x1b[0m Provider (claude/openai/ollama): "));
+
+            if prov.is_empty() {
+                bail!("No provider specified. Run: rvn setup llm --provider claude --key YOUR_KEY");
+            }
+
+            match prov.as_str() {
+                "claude" => {
+                    let api_key = key.unwrap_or_else(|| read_stdin_line("\x1b[2m│\x1b[0m API key (sk-ant-...): "));
+                    if api_key.is_empty() {
+                        bail!("No API key provided.");
+                    }
+                    let mdl = model.unwrap_or_else(|| "claude-haiku-4-5-20251001".to_string());
+                    update_config_value("compressor.mode", "\"llm\"")?;
+                    update_config_value("compressor.llm.provider", "\"claude\"")?;
+                    update_config_value("compressor.llm.model", &format!("\"{}\"", mdl))?;
+                    update_config_value("compressor.llm.api_key", &format!("\"{}\"", api_key))?;
+                    update_config_value("compressor.llm.endpoint", "\"https://api.anthropic.com/v1/messages\"")?;
+                    println!("\x1b[2m│\x1b[0m");
+                    println!("\x1b[2m│\x1b[0m \x1b[32m✓\x1b[0m LLM compression enabled: Claude {}", mdl);
+                }
+                "openai" => {
+                    let api_key = key.unwrap_or_else(|| read_stdin_line("\x1b[2m│\x1b[0m API key (sk-...): "));
+                    if api_key.is_empty() {
+                        bail!("No API key provided.");
+                    }
+                    let mdl = model.unwrap_or_else(|| "gpt-4o-mini".to_string());
+                    update_config_value("compressor.mode", "\"llm\"")?;
+                    update_config_value("compressor.llm.provider", "\"openai\"")?;
+                    update_config_value("compressor.llm.model", &format!("\"{}\"", mdl))?;
+                    update_config_value("compressor.llm.api_key", &format!("\"{}\"", api_key))?;
+                    update_config_value("compressor.llm.endpoint", "\"https://api.openai.com/v1/chat/completions\"")?;
+                    println!("\x1b[2m│\x1b[0m");
+                    println!("\x1b[2m│\x1b[0m \x1b[32m✓\x1b[0m LLM compression enabled: OpenAI {}", mdl);
+                }
+                "ollama" => {
+                    let mdl = model.unwrap_or_else(|| "llama3.2:3b".to_string());
+                    update_config_value("compressor.mode", "\"llm\"")?;
+                    update_config_value("compressor.llm.provider", "\"ollama\"")?;
+                    update_config_value("compressor.llm.model", &format!("\"{}\"", mdl))?;
+                    update_config_value("compressor.llm.api_key", "\"\"")?;
+                    update_config_value("compressor.llm.endpoint", "\"http://localhost:11434/api/generate\"")?;
+                    println!("\x1b[2m│\x1b[0m");
+                    println!("\x1b[2m│\x1b[0m \x1b[32m✓\x1b[0m LLM compression enabled: Ollama {}", mdl);
+                    println!("\x1b[2m│\x1b[0m   Make sure Ollama is running: ollama serve");
+                    println!("\x1b[2m│\x1b[0m   Pull the model: ollama pull {}", mdl);
+                }
+                other => bail!("Unknown provider: '{}'. Use: claude, openai, or ollama", other),
+            }
+
+            println!("\x1b[2m│\x1b[0m");
+            println!("\x1b[2m│\x1b[0m Restart the daemon to apply: \x1b[36mrvn off && rvn on\x1b[0m");
+            println!("\x1b[2m└───\x1b[0m");
+        }
         "vscode" => {
             println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} VS Code Ghost Setup \u{2500}\u{2500}\u{2500}\x1b[0m");
             println!("\x1b[2m\u{2502}\x1b[0m");
@@ -1125,7 +1279,9 @@ fn main() -> Result<()> {
         Commands::Off => cmd_off(),
         Commands::On => cmd_on(),
         Commands::Forget { project, all } => cmd_forget(project, all),
-        Commands::Setup { channel } => cmd_setup(&channel),
+        Commands::Setup { channel, key, provider, model, vault, token, user, channel_id } => {
+            cmd_setup(&channel, key, provider, model, vault, token, user, channel_id)
+        }
         Commands::Test => cmd_test(),
     }
 }

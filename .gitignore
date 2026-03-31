@@ -21,3 +21,4 @@ revenant-slack
 *.pid
 *.sock
 *.log
+.env
