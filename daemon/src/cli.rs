@@ -99,6 +99,9 @@ enum Commands {
 
     /// Inject a synthetic context card and dispatch to all enabled ghosts
     Test,
+
+    /// Clear the current ghost immediately
+    Clear,
 }
 
 // ─── Paths ───────────────────────────────────────────────────────────
@@ -1032,6 +1035,27 @@ fn cmd_setup(
     Ok(())
 }
 
+fn cmd_clear() -> Result<()> {
+    let rev_dir = revenant_dir();
+
+    // Clear terminal ghost
+    let motd = rev_dir.join("motd");
+    let active = rev_dir.join("terminal-active");
+    let _ = std::fs::remove_file(&motd);
+    let _ = std::fs::remove_file(&active);
+
+    // Clear browser ghost
+    let browser_state = rev_dir.join("browser-state.json");
+    let _ = std::fs::write(&browser_state, r#"{"type":"clear"}"#);
+
+    // Clear obsidian ghost
+    let obsidian_state = rev_dir.join("obsidian-state.json");
+    let _ = std::fs::write(&obsidian_state, r#"{"type":"clear"}"#);
+
+    println!("\x1b[2m✓\x1b[0m ghost cleared");
+    Ok(())
+}
+
 fn cmd_test() -> Result<()> {
     let db = db_path();
     let rev_dir = revenant_dir();
@@ -1283,5 +1307,6 @@ fn main() -> Result<()> {
             cmd_setup(&channel, key, provider, model, vault, token, user, channel_id)
         }
         Commands::Test => cmd_test(),
+        Commands::Clear => cmd_clear(),
     }
 }
