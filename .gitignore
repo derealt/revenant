@@ -22,3 +22,4 @@ revenant-slack
 *.sock
 *.log
 .env
+release/

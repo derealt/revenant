@@ -37,7 +37,7 @@ default = []
 llm-api = ["reqwest"]
 
 [[bin]]
-name = "rev"
+name = "rvn"
 path = "src/cli.rs"
 
 [profile.release]
