@@ -1332,6 +1332,32 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
         file_count,
     );
 
+    // Guard: ensure summary is always meaningful
+    let summary = {
+        let s = summary.trim();
+        let has_project = s.to_lowercase().contains(&state.project_name.to_lowercase());
+        let has_substance = s.len() > 40 && !s.ends_with("working on.") && !s.ends_with("working on");
+
+        if has_substance && has_project {
+            s.to_string()
+        } else if has_substance && !has_project {
+            // Good content but missing project name
+            format!("In {}: {}", state.project_name, s)
+        } else {
+            // Thin summary — build a reliable one from raw signals
+            let mut parts = vec![format!("{} in {}", temporal, state.project_name)];
+            if !commit_context.is_empty() {
+                parts.push(format!("you were {} {}", intent.verb(), commit_context));
+            } else if !active_file.is_empty() {
+                parts.push(format!("you were editing {}", active_file));
+            }
+            if !cluster.is_empty() {
+                parts.push(cluster.clone());
+            }
+            parts.join(". ")
+        }
+    };
+
     // Ensure summary doesn't end mid-sentence
     let summary = clean_summary(&summary);
 
