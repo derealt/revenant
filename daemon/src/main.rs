@@ -89,6 +89,13 @@ async fn main() -> Result<()> {
     // Channel for switch events
     let (switch_tx, mut switch_rx) = mpsc::channel::<SwitchEvent>(32);
 
+    // Spawn ghost HTTP server for browser extension polling
+    let ghost_http = Arc::new(ghost::http::GhostHttpServer::new());
+    let ghost_http_server = Arc::clone(&ghost_http);
+    tokio::spawn(async move {
+        ghost_http_server.serve(7711).await;
+    });
+
     // Spawn file watcher
     let watcher_config = config.clone();
     let watcher_switch_tx = switch_tx.clone();
@@ -183,6 +190,19 @@ async fn main() -> Result<()> {
                     match d.store.latest_card(&project_dir) {
                         Ok(Some(card)) => {
                             info!("restoring ghost for {} — {}", card.project_dir, card.summary);
+                            // Update HTTP server for browser extension
+                            let card_json = serde_json::json!({
+                                "type": "inject",
+                                "card": {
+                                    "id": card.id,
+                                    "summary": card.summary,
+                                    "next_step": card.next_step,
+                                    "project_dir": card.project_dir,
+                                    "project_name": card.project_dir.split('/').last().unwrap_or("unknown"),
+                                    "ttl_seconds": card.ttl_seconds,
+                                }
+                            });
+                            ghost_http.inject(serde_json::to_string(&card_json).unwrap_or_default());
                             if let Err(e) = d.dispatcher.dispatch(&card).await {
                                 error!("ghost dispatch failed: {e}");
                             }
@@ -195,6 +215,7 @@ async fn main() -> Result<()> {
                 }
                 SwitchKind::Timeout => {
                     // Activity timeout — clear any lingering ghosts
+                    ghost_http.clear();
                     if let Err(e) = d.dispatcher.clear_all().await {
                         warn!("failed to clear ghosts on timeout: {e}");
                     }

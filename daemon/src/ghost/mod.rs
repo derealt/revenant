@@ -5,6 +5,7 @@
 //! Ghosts are transient — they self-destruct after the configured TTL.
 
 pub mod browser;
+pub mod http;
 pub mod obsidian;
 pub mod slack;
 pub mod terminal;
