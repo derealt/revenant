@@ -102,6 +102,13 @@ enum Commands {
 
     /// Clear the current ghost immediately
     Clear,
+
+    /// Show a weekly attention digest across all projects
+    Digest {
+        /// Number of days to look back (default: 7)
+        #[arg(short, long, default_value = "7")]
+        days: u64,
+    },
 }
 
 // ─── Paths ───────────────────────────────────────────────────────────
@@ -1138,13 +1145,19 @@ fn cmd_test() -> Result<()> {
     )?;
     println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m context card saved to SQLite");
 
-    // Dispatch to terminal ghost (write motd directly)
+    // Dispatch to terminal ghost (write motd directly with premium format)
     let motd_path = rev_dir.join("motd");
+    let dim = "\x1b[2m";
+    let reset = "\x1b[0m";
+    let white = "\x1b[97m";
+    let gold = "\x1b[38;5;178m";
+    let accent = "\x1b[38;5;145m"; // silver for test cards
+
     let motd = format!(
-        "\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} REVENANT \u{2500}\u{2500}\u{2500} {project} \u{2500}\u{2500}\u{2500} just now \u{2500}\u{2500}\u{2500}\x1b[0m\n\
-         \x1b[2m\u{2502}\x1b[0m \x1b[36m{summary}\x1b[0m\n\
-         \x1b[2m\u{2502}\x1b[0m \x1b[33mNext: {next}\x1b[0m\n\
-         \x1b[2m\u{2514}\u{2500}\u{2500}\u{2500} ghost expires in 5min of activity \u{2500}\u{2500}\u{2500}\x1b[0m\n",
+        "{dim}\u{2554}\u{2550}\u{2550}{reset}{accent} REVENANT \u{2502} {project} \u{2502} just now {reset}{dim} \u{2550}\u{2550}\u{2557}{reset}\n\
+         {dim}\u{2551}{reset} {white}{summary}{reset}\n\
+         {dim}\u{2551}{reset} {gold}\u{2192} {next}{reset}\n\
+         {dim}\u{255a}\u{2550}\u{2550} ghost fades in 5min of activity \u{2550}\u{2550}\u{255d}{reset}\n",
         project = project_name,
         summary = summary,
         next = next_step,
@@ -1243,6 +1256,165 @@ fn dispatch_socket_ghost(
     Ok(())
 }
 
+fn cmd_digest(days: u64) -> Result<()> {
+    let conn = open_db_readonly()?;
+    let since = Utc::now() - chrono::Duration::days(days as i64);
+
+    // Get project summaries
+    struct ProjectEntry {
+        name: String,
+        cards: usize,
+    }
+
+    let projects: Vec<ProjectEntry> = {
+        let mut stmt = conn.prepare(
+            "SELECT project_name, COUNT(*) as card_count
+             FROM context_cards
+             WHERE created_at >= ?1
+             GROUP BY project_dir
+             ORDER BY card_count DESC",
+        )?;
+        let rows = stmt.query_map(params![since.to_rfc3339()], |row| {
+            Ok(ProjectEntry {
+                name: row.get(0)?,
+                cards: row.get::<_, i64>(1)? as usize,
+            })
+        })?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    if projects.is_empty() {
+        println!("\x1b[2mno activity in the last {days} days\x1b[0m");
+        return Ok(());
+    }
+
+    let total_cards: usize = projects.iter().map(|p| p.cards).sum();
+
+    // Count context switches
+    let switch_count: usize = {
+        let mut stmt = conn.prepare(
+            "SELECT project_name FROM context_cards WHERE created_at >= ?1 ORDER BY created_at ASC",
+        )?;
+        let names: Vec<String> = stmt
+            .query_map(params![since.to_rfc3339()], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        names.windows(2).filter(|w| w[0] != w[1]).count()
+    };
+
+    // Busiest day
+    let busiest: Option<(String, usize)> = {
+        let mut stmt = conn.prepare(
+            "SELECT date(created_at) as day, COUNT(*) as cnt
+             FROM context_cards
+             WHERE created_at >= ?1
+             GROUP BY day
+             ORDER BY cnt DESC
+             LIMIT 1",
+        )?;
+        stmt.query_row(params![since.to_rfc3339()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })
+        .ok()
+    };
+
+    // Intent analysis from summaries
+    let mut intent_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let summaries: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT summary FROM context_cards WHERE created_at >= ?1",
+        )?;
+        let rows = stmt.query_map(params![since.to_rfc3339()], |row| row.get(0))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    for s in &summaries {
+        let lower = s.to_lowercase();
+        for keyword in &["fixing", "building", "testing", "refactoring", "deploying", "reviewing", "configuring", "creating", "documenting"] {
+            if lower.contains(keyword) {
+                *intent_counts.entry(keyword).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut intents: Vec<(&str, usize)> = intent_counts.into_iter().collect();
+    intents.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // ─── Render ───
+
+    let period_label = if days == 7 { "this week".to_string() } else { format!("last {days} days") };
+
+    println!();
+    println!(
+        "\x1b[2m\u{2554}\u{2550}\u{2550}\x1b[0m\x1b[38;5;178m REVENANT DIGEST \u{2502} {period_label} \x1b[0m\x1b[2m\u{2550}\u{2550}\u{2557}\x1b[0m"
+    );
+    println!("\x1b[2m\u{2551}\x1b[0m");
+
+    // Headline stats
+    println!(
+        "\x1b[2m\u{2551}\x1b[0m  \x1b[97m{total_cards}\x1b[0m context snapshots across \x1b[97m{}\x1b[0m projects",
+        projects.len()
+    );
+    println!(
+        "\x1b[2m\u{2551}\x1b[0m  \x1b[97m{switch_count}\x1b[0m context switches detected"
+    );
+    if let Some((day, count)) = busiest {
+        println!(
+            "\x1b[2m\u{2551}\x1b[0m  Busiest day: \x1b[97m{day}\x1b[0m ({count} snapshots)"
+        );
+    }
+    println!("\x1b[2m\u{2551}\x1b[0m");
+
+    // Project breakdown with visual bar
+    println!("\x1b[2m\u{2551}\x1b[0m  \x1b[2mATTENTION DISTRIBUTION\x1b[0m");
+    let max_cards = projects.iter().map(|p| p.cards).max().unwrap_or(1);
+    let bar_width = 24usize;
+
+    for (i, proj) in projects.iter().enumerate() {
+        let bar_len = (proj.cards as f64 / max_cards as f64 * bar_width as f64).ceil() as usize;
+        let bar: String = "\u{2588}".repeat(bar_len);
+        let pct = (proj.cards as f64 / total_cards as f64 * 100.0) as usize;
+
+        let color = if i == 0 { "\x1b[38;5;178m" } else { "\x1b[38;5;245m" };
+        println!(
+            "\x1b[2m\u{2551}\x1b[0m  {color}{bar}\x1b[0m {:<14} \x1b[2m{:>3}% ({} cards)\x1b[0m",
+            proj.name, pct, proj.cards
+        );
+    }
+
+    // Intent breakdown
+    if !intents.is_empty() {
+        println!("\x1b[2m\u{2551}\x1b[0m");
+        println!("\x1b[2m\u{2551}\x1b[0m  \x1b[2mWHAT YOU WERE DOING\x1b[0m");
+        for (intent, count) in intents.iter().take(5) {
+            let icon = match *intent {
+                "fixing" => "\x1b[38;5;203m\u{25CF}\x1b[0m",
+                "building" | "creating" => "\x1b[38;5;178m\u{25CF}\x1b[0m",
+                "testing" => "\x1b[38;5;114m\u{25CF}\x1b[0m",
+                "deploying" => "\x1b[38;5;213m\u{25CF}\x1b[0m",
+                "refactoring" => "\x1b[38;5;110m\u{25CF}\x1b[0m",
+                _ => "\x1b[38;5;145m\u{25CF}\x1b[0m",
+            };
+            println!(
+                "\x1b[2m\u{2551}\x1b[0m  {icon} {intent:<14} \x1b[2m{count}x\x1b[0m"
+            );
+        }
+    }
+
+    println!("\x1b[2m\u{2551}\x1b[0m");
+    println!(
+        "\x1b[2m\u{255a}\u{2550}\u{2550} {} \u{2550}\u{2550}\u{255d}\x1b[0m",
+        if switch_count > 50 {
+            "heavy multitasking \u{2014} consider deeper focus blocks"
+        } else if switch_count > 20 {
+            "moderate context switching"
+        } else {
+            "focused work pattern"
+        }
+    );
+    println!();
+
+    Ok(())
+}
+
 // ─── Utilities ───────────────────────────────────────────────────────
 
 fn format_age(dt: DateTime<Utc>) -> String {
@@ -1308,5 +1480,6 @@ fn main() -> Result<()> {
         }
         Commands::Test => cmd_test(),
         Commands::Clear => cmd_clear(),
+        Commands::Digest { days } => cmd_digest(days),
     }
 }

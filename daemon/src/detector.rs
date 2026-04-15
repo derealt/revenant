@@ -27,7 +27,11 @@ pub enum SwitchKind {
     /// User left a project (save snapshot)
     Departure { project_dir: String },
     /// User returned to a project (restore ghost)
-    Return { project_dir: String },
+    Return {
+        project_dir: String,
+        /// Which project the user came from (if this was a project switch)
+        from_project: Option<String>,
+    },
     /// Activity timeout — user has been back long enough, clear ghosts
     Timeout,
 }
@@ -102,6 +106,7 @@ impl SwitchDetector {
             Some(SwitchEvent {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
+                    from_project: switched_from,
                 },
                 timestamp: Utc::now(),
             })
@@ -110,6 +115,7 @@ impl SwitchDetector {
             Some(SwitchEvent {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
+                    from_project: None,
                 },
                 timestamp: Utc::now(),
             })
@@ -173,6 +179,7 @@ impl SwitchDetector {
             Some(SwitchEvent {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
+                    from_project: None,
                 },
                 timestamp: Utc::now(),
             })

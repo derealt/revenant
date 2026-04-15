@@ -89,7 +89,18 @@ impl SnapshotAggregator {
     pub async fn capture(&self, project_dir: &str) -> Result<WorkingState> {
         let project_name = std::path::Path::new(project_dir)
             .file_name()
-            .map(|n| n.to_string_lossy().to_string())
+            .map(|n| {
+                let raw = n.to_string_lossy();
+                // Capitalize: "limn" → "Limn", "AIMO3" stays "AIMO3"
+                let mut chars = raw.chars();
+                match chars.next() {
+                    Some(c) => {
+                        let first = c.to_uppercase().to_string();
+                        format!("{}{}", first, chars.as_str())
+                    }
+                    None => raw.to_string(),
+                }
+            })
             .unwrap_or_else(|| "unknown".into());
 
         // Capture all enabled signals concurrently

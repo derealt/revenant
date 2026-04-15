@@ -95,9 +95,29 @@ impl ContextStore {
         Ok(())
     }
 
-    /// Save a context card
+    /// Save a context card, skipping if it's a near-duplicate of the latest card
     pub fn save_card(&self, card: &ContextCard) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+
+        // Dedup: skip if the latest card for this project is >80% similar
+        let maybe_prev: Option<String> = conn
+            .query_row(
+                "SELECT summary FROM context_cards WHERE project_dir = ?1 ORDER BY created_at DESC LIMIT 1",
+                params![card.project_dir],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(ref prev_summary) = maybe_prev {
+            if text_similarity(prev_summary, &card.summary) > 0.80 {
+                tracing::debug!(
+                    "skipping near-duplicate card for {} (similarity > 80%)",
+                    card.project_name
+                );
+                return Ok(());
+            }
+        }
+
         conn.execute(
             "INSERT OR REPLACE INTO context_cards
                 (id, project_dir, project_name, summary, next_step, created_at, signals_json, ttl_seconds)
@@ -245,6 +265,97 @@ impl ContextStore {
         Ok(count as usize)
     }
 
+    /// Get the count of cards for a project within a time window
+    pub fn cards_in_window(
+        &self,
+        project_dir: &str,
+        since: DateTime<Utc>,
+    ) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM context_cards WHERE project_dir = ?1 AND created_at >= ?2",
+            params![project_dir, since.to_rfc3339()],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Get all cards across all projects within a time window, newest first
+    pub fn cards_since(&self, since: DateTime<Utc>, limit: usize) -> Result<Vec<ContextCard>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_dir, project_name, summary, next_step, created_at, signals_json, ttl_seconds
+             FROM context_cards
+             WHERE created_at >= ?1
+             ORDER BY created_at DESC
+             LIMIT ?2",
+        )?;
+
+        let cards = stmt
+            .query_map(params![since.to_rfc3339(), limit as i64], |row| {
+                Ok(ContextCard {
+                    id: row.get(0)?,
+                    project_dir: row.get(1)?,
+                    project_name: row.get(2)?,
+                    summary: row.get(3)?,
+                    next_step: row.get(4)?,
+                    created_at: {
+                        let s: String = row.get(5)?;
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now())
+                    },
+                    signals_json: row.get(6)?,
+                    ttl_seconds: row.get::<_, i64>(7)? as u64,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(cards)
+    }
+
+    /// Get distinct projects with card counts and last activity, ordered by recency
+    pub fn project_summary_since(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ProjectDigestEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT project_dir, project_name, COUNT(*) as card_count,
+                    MAX(created_at) as last_active, MIN(created_at) as first_active
+             FROM context_cards
+             WHERE created_at >= ?1
+             GROUP BY project_dir
+             ORDER BY card_count DESC",
+        )?;
+
+        let entries = stmt
+            .query_map(params![since.to_rfc3339()], |row| {
+                Ok(ProjectDigestEntry {
+                    project_dir: row.get(0)?,
+                    project_name: row.get(1)?,
+                    card_count: row.get::<_, i64>(2)? as usize,
+                    last_active: {
+                        let s: String = row.get(3)?;
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now())
+                    },
+                    first_active: {
+                        let s: String = row.get(4)?;
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now())
+                    },
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(entries)
+    }
+
     /// List all known project directories
     pub fn known_projects(&self) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
@@ -257,4 +368,34 @@ impl ContextStore {
             .collect();
         Ok(projects)
     }
+}
+
+/// Digest entry for a project's activity over a time window
+#[derive(Debug, Clone)]
+pub struct ProjectDigestEntry {
+    pub project_dir: String,
+    pub project_name: String,
+    pub card_count: usize,
+    pub last_active: DateTime<Utc>,
+    pub first_active: DateTime<Utc>,
+}
+
+/// Simple word-overlap similarity (Jaccard index on word sets)
+/// Returns a value between 0.0 and 1.0
+fn text_similarity(a: &str, b: &str) -> f64 {
+    let words_a: std::collections::HashSet<&str> = a.split_whitespace().collect();
+    let words_b: std::collections::HashSet<&str> = b.split_whitespace().collect();
+
+    if words_a.is_empty() && words_b.is_empty() {
+        return 1.0;
+    }
+
+    let intersection = words_a.intersection(&words_b).count();
+    let union = words_a.union(&words_b).count();
+
+    if union == 0 {
+        return 0.0;
+    }
+
+    intersection as f64 / union as f64
 }

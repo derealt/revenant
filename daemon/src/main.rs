@@ -185,10 +185,20 @@ async fn main() -> Result<()> {
                         Err(e) => warn!("snapshot capture failed: {e}"),
                     }
                 }
-                SwitchKind::Return { project_dir } => {
+                SwitchKind::Return { project_dir, from_project } => {
                     // User returned — load card, dispatch ghosts
                     match d.store.latest_card(&project_dir) {
-                        Ok(Some(card)) => {
+                        Ok(Some(mut card)) => {
+                            // Enrich card with cross-project context
+                            if let Some(ref from) = from_project {
+                                let from_name = from.rsplit('/').next().unwrap_or("unknown");
+                                card.summary = format!(
+                                    "{} (you switched from {})",
+                                    card.summary.trim_end_matches('.'),
+                                    from_name
+                                );
+                            }
+
                             info!("restoring ghost for {} — {}", card.project_dir, card.summary);
                             // Update HTTP server for browser extension
                             let card_json = serde_json::json!({
@@ -200,6 +210,7 @@ async fn main() -> Result<()> {
                                     "project_dir": card.project_dir,
                                     "project_name": card.project_dir.split('/').last().unwrap_or("unknown"),
                                     "ttl_seconds": card.ttl_seconds,
+                                    "from_project": from_project.as_deref().and_then(|p| p.rsplit('/').next()),
                                 }
                             });
                             ghost_http.inject(serde_json::to_string(&card_json).unwrap_or_default());

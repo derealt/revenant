@@ -115,7 +115,8 @@ pub async fn run_watcher(
 
                         if project_changed {
                             // Departure from previous project
-                            if let Some(ref prev) = active_project {
+                            let from = active_project.clone();
+                            if let Some(ref prev) = from {
                                 debug!("project switch: {} -> {}", prev, project_str);
                                 let _ = switch_tx
                                     .send(SwitchEvent {
@@ -127,11 +128,12 @@ pub async fn run_watcher(
                                     .await;
                             }
 
-                            // Return to new project
+                            // Return to new project — carry where we came from
                             let _ = switch_tx
                                 .send(SwitchEvent {
                                     kind: SwitchKind::Return {
                                         project_dir: project_str.clone(),
+                                        from_project: from,
                                     },
                                     timestamp: chrono::Utc::now(),
                                 })
@@ -158,6 +160,7 @@ pub async fn run_watcher(
                                 .send(SwitchEvent {
                                     kind: SwitchKind::Return {
                                         project_dir: project_str.clone(),
+                                        from_project: None,
                                     },
                                     timestamp: chrono::Utc::now(),
                                 })

@@ -276,22 +276,26 @@ fn test_motd_generation() {
     let next_step = "Add branch comparison to the polling loop in detector.rs";
     let ttl_minutes = 5;
 
-    let motd = format!(
-        concat!(
-            "\x1b[2m┌─── REVENANT ─── {} ───\x1b[0m\n",
-            "\x1b[2m│\x1b[0m \x1b[36m{}\x1b[0m\n",
-            "\x1b[2m│\x1b[0m \x1b[33mNext: {}\x1b[0m\n",
-            "\x1b[2m└─── ghost expires in {}min of activity ───\x1b[0m\n",
-        ),
-        project, summary, next_step, ttl_minutes,
-    );
+    // Build MOTD with premium format (double-line borders, intent coloring)
+    let dim = "\x1b[2m";
+    let reset = "\x1b[0m";
+    let white = "\x1b[97m";
+    let gold = "\x1b[38;5;178m";
 
-    // Verify ANSI codes are present
+    let mut motd = String::new();
+    motd.push_str(&format!("{dim}\u{2554}\u{2550}\u{2550}{reset}"));
+    motd.push_str(&format!(" REVENANT \u{2502} {project} \u{2502} "));
+    motd.push_str(&format!("{reset}{dim} \u{2550}\u{2550}\u{2557}{reset}\n"));
+    motd.push_str(&format!("{dim}\u{2551}{reset} {white}{summary}{reset}\n"));
+    motd.push_str(&format!("{dim}\u{2551}{reset} {gold}\u{2192} {next_step}{reset}\n"));
+    motd.push_str(&format!("{dim}\u{255a}\u{2550}\u{2550} ghost fades in {ttl_minutes}min of activity \u{2550}\u{2550}\u{255d}{reset}\n"));
+
+    // Verify ANSI codes and content are present
     assert!(motd.contains("\x1b[2m")); // dim
-    assert!(motd.contains("\x1b[36m")); // cyan
-    assert!(motd.contains("\x1b[33m")); // yellow
+    assert!(motd.contains("\x1b[97m")); // white
+    assert!(motd.contains("\x1b[38;5;178m")); // gold
     assert!(motd.contains("REVENANT"));
-    assert!(motd.contains("branch changes"));
+    assert!(motd.contains("Branch changes"));
     assert!(motd.contains("detector.rs"));
 }
 

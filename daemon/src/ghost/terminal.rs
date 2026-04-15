@@ -29,30 +29,42 @@ impl TerminalGhost {
         let now = Utc::now();
         let age = now.signed_duration_since(card.created_at);
         let age_str = format_duration(age);
+        let ttl_min = card.ttl_seconds / 60;
 
-        // Build the MOTD content
-        // Uses ANSI escape codes for subtle styling
-        let motd = format!(
-            concat!(
-                "\x1b[2m", // dim
-                "┌─── REVENANT ─── {project} ─── {age} ago ───\x1b[0m\n",
-                "\x1b[2m│\x1b[0m \x1b[36m{summary}\x1b[0m\n",
-                "{next_line}",
-                "\x1b[2m└─── ghost expires in {ttl}min of activity ───\x1b[0m\n",
-            ),
-            project = card.project_name,
-            age = age_str,
+        // Intent-based accent color
+        let accent = intent_color(&card.summary);
+        let dim = "\x1b[2m";
+        let reset = "\x1b[0m";
+        let white = "\x1b[97m";
+        let gold = "\x1b[38;5;178m";
+
+        // Build premium MOTD with double-line borders and visual hierarchy
+        let mut motd = String::with_capacity(512);
+
+        // Top border with project name centered
+        let header = format!(" REVENANT \u{2502} {} \u{2502} {} ago ", card.project_name, age_str);
+        motd.push_str(&format!(
+            "{dim}\u{2554}\u{2550}\u{2550}{reset}{accent} {header}{reset}{dim} \u{2550}\u{2550}\u{2557}{reset}\n",
+        ));
+
+        // Summary line — white for legibility
+        motd.push_str(&format!(
+            "{dim}\u{2551}{reset} {white}{summary}{reset}\n",
             summary = card.summary,
-            next_line = if card.next_step.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "\x1b[2m│\x1b[0m \x1b[33mNext: {}\x1b[0m\n",
-                    card.next_step
-                )
-            },
-            ttl = card.ttl_seconds / 60,
-        );
+        ));
+
+        // Next step line — gold accent
+        if !card.next_step.is_empty() {
+            motd.push_str(&format!(
+                "{dim}\u{2551}{reset} {gold}\u{2192} {next}{reset}\n",
+                next = card.next_step,
+            ));
+        }
+
+        // Bottom border with ghost TTL
+        motd.push_str(&format!(
+            "{dim}\u{255a}\u{2550}\u{2550} ghost fades in {ttl_min}min of activity \u{2550}\u{2550}\u{255d}{reset}\n",
+        ));
 
         // Write the MOTD file atomically (write to temp, rename)
         let tmp_path = self.motd_path.with_extension("tmp");
@@ -83,6 +95,24 @@ impl TerminalGhost {
             tokio::fs::remove_file(&meta_path).await?;
         }
         Ok(())
+    }
+}
+
+/// Map card content to an intent-based ANSI accent color
+fn intent_color(summary: &str) -> &'static str {
+    let lower = summary.to_lowercase();
+    if lower.contains("fixing") || lower.contains("fix ") || lower.contains("bug") {
+        "\x1b[38;5;203m" // red-coral for fixes
+    } else if lower.contains("testing") || lower.contains("test ") || lower.contains("tests") {
+        "\x1b[38;5;114m" // green for tests
+    } else if lower.contains("deploying") || lower.contains("deploy") || lower.contains("release") {
+        "\x1b[38;5;213m" // pink for deploys
+    } else if lower.contains("refactoring") || lower.contains("cleaning") {
+        "\x1b[38;5;110m" // blue for refactors
+    } else if lower.contains("building") || lower.contains("adding") || lower.contains("creating") {
+        "\x1b[38;5;178m" // gold for building
+    } else {
+        "\x1b[38;5;145m" // silver for general work
     }
 }
 

@@ -1130,8 +1130,23 @@ const TEMPLATES: &[&str] = &[
     "Last commit was {commit}. You were {intent} {topic}.",
 ];
 
-/// Select a template based on a seed and available data
-fn select_template(card_id: &str, has_commit: bool, has_cluster: bool, has_branch: bool) -> usize {
+/// Card depth — controls how much context to include
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CardDepth {
+    /// < 30min absence: 1 sentence, minimal detail
+    Terse,
+    /// 30min-4hr: 2 sentences, cluster + next step
+    Standard,
+    /// > 4hr: full context, all signals
+    Rich,
+}
+
+/// Templates classified by depth
+const TERSE_TEMPLATES: &[usize] = &[9, 4, 26];  // Minimal, Short+project, Simple+project
+const RICH_TEMPLATES: &[usize] = &[0, 6, 7, 11, 13, 17, 18, 24, 10]; // Multi-sentence, narrative
+
+/// Select a template based on a seed, available data, and depth
+fn select_template(card_id: &str, has_commit: bool, has_cluster: bool, has_branch: bool, depth: CardDepth) -> usize {
     // Use card ID as a deterministic seed
     let seed: usize = card_id.bytes().map(|b| b as usize).sum();
 
@@ -1150,10 +1165,25 @@ fn select_template(card_id: &str, has_commit: bool, has_cluster: bool, has_branc
         .collect();
 
     if valid.is_empty() {
-        0 // fallback to first template
-    } else {
-        valid[seed % valid.len()]
+        return 0;
     }
+
+    // Filter by depth preference
+    let depth_filtered: Vec<usize> = match depth {
+        CardDepth::Terse => valid.iter()
+            .copied()
+            .filter(|i| TERSE_TEMPLATES.contains(i))
+            .collect(),
+        CardDepth::Rich => valid.iter()
+            .copied()
+            .filter(|i| RICH_TEMPLATES.contains(i))
+            .collect(),
+        CardDepth::Standard => valid.clone(),
+    };
+
+    // Fall back to all valid templates if depth filter yields nothing
+    let pool = if depth_filtered.is_empty() { &valid } else { &depth_filtered };
+    pool[seed % pool.len()]
 }
 
 /// Fill a template with actual values
@@ -1272,6 +1302,11 @@ fn extract_object_from_rewrite(rewrite: &str) -> String {
 /// Produces LLM-quality context cards by analyzing signal patterns through
 /// seven engines: intent classification, path semantics, commit rewriting,
 /// file clustering, next-step prediction, temporal framing, and template selection.
+///
+/// Card depth scales with absence duration:
+/// - < 30min: terse (1 sentence, minimal detail)
+/// - 30min-4hr: standard (2 sentences, cluster + next step)
+/// - > 4hr: rich (full context, commit history, file details, strong next step)
 pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
     let card_id = Uuid::new_v4().to_string();
 
@@ -1316,7 +1351,17 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
         .map(|g| g.branch != "main" && g.branch != "master")
         .unwrap_or(false);
 
-    let template_idx = select_template(&card_id, has_commit, has_cluster, has_branch);
+    // Determine card depth based on absence duration
+    let absence_minutes = Utc::now().signed_duration_since(state.timestamp).num_minutes();
+    let depth = if absence_minutes < 30 {
+        CardDepth::Terse
+    } else if absence_minutes < 240 {
+        CardDepth::Standard
+    } else {
+        CardDepth::Rich
+    };
+
+    let template_idx = select_template(&card_id, has_commit, has_cluster, has_branch, depth);
 
     let summary = fill_template(
         template_idx,
@@ -1361,6 +1406,23 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
     // Ensure summary doesn't end mid-sentence
     let summary = clean_summary(&summary);
 
+    // For rich depth, add extra commit context to next_step if available
+    let next_step = if depth == CardDepth::Rich && has_commit {
+        let recent_commits: Vec<String> = state.git.as_ref()
+            .map(|g| g.recent_commits.iter().take(3)
+                .map(|c| rewrite_commit_message(&c.message))
+                .filter(|m| !m.is_empty())
+                .collect())
+            .unwrap_or_default();
+        if recent_commits.len() > 1 {
+            format!("{} Recent trail: {}.", next_step.trim_end_matches('.'), recent_commits[1..].join(", then "))
+        } else {
+            next_step
+        }
+    } else {
+        next_step
+    };
+
     ContextCard {
         id: card_id,
         project_dir: state.project_dir.clone(),
@@ -1391,6 +1453,7 @@ fn clean_summary(s: &str) -> String {
     result = result.replace(" .", ".");
     result = result.replace(" ,", ",");
     result = result.replace("()", "");
+    result = result.replace("..", ".");
     result = result.replace("  ", " ");
 
     result
