@@ -14,6 +14,7 @@ mod store;
 mod watcher;
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook_tokio::Signals;
 use std::path::PathBuf;
@@ -95,6 +96,39 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         ghost_http_server.serve(7711).await;
     });
+
+    // Pre-load the most recent card into the HTTP ghost so the browser
+    // extension has something to show immediately on startup/return,
+    // even before the file watcher detects activity.
+    {
+        let d = daemon.read().await;
+        let recent_card = d.store.cards_since(
+            Utc::now() - chrono::Duration::days(7),
+            1,
+        );
+        if let Ok(cards) = recent_card {
+            if let Some(card) = cards.into_iter().next() {
+                let card_json = serde_json::json!({
+                    "type": "inject",
+                    "card": {
+                        "id": card.id,
+                        "summary": card.summary,
+                        "next_step": card.next_step,
+                        "project_dir": card.project_dir,
+                        "project_name": card.project_name,
+                        "ttl_seconds": card.ttl_seconds,
+                    }
+                });
+                ghost_http.inject(serde_json::to_string(&card_json).unwrap_or_default());
+                info!("pre-loaded startup ghost for {} — {}", card.project_name, card.summary);
+
+                // Also write the terminal MOTD so new shells see it
+                if let Err(e) = d.dispatcher.dispatch(&card).await {
+                    warn!("startup ghost dispatch failed: {e}");
+                }
+            }
+        }
+    }
 
     // Spawn file watcher
     let watcher_config = config.clone();
