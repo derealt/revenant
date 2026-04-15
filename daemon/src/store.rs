@@ -109,9 +109,13 @@ impl ContextStore {
             .ok();
 
         if let Some(ref prev_summary) = maybe_prev {
-            if text_similarity(prev_summary, &card.summary) > 0.80 {
+            // Strip temporal prefixes before comparing — "Just now you were"
+            // vs "Moments ago you were" should still count as duplicates
+            let a = strip_temporal_prefix(prev_summary);
+            let b = strip_temporal_prefix(&card.summary);
+            if text_similarity(&a, &b) > 0.75 {
                 tracing::debug!(
-                    "skipping near-duplicate card for {} (similarity > 80%)",
+                    "skipping near-duplicate card for {} (similarity > 75%)",
                     card.project_name
                 );
                 return Ok(());
@@ -378,6 +382,38 @@ pub struct ProjectDigestEntry {
     pub card_count: usize,
     pub last_active: DateTime<Utc>,
     pub first_active: DateTime<Utc>,
+}
+
+/// Strip temporal framing prefixes so dedup compares the substance, not the phrasing
+fn strip_temporal_prefix(s: &str) -> String {
+    let prefixes = [
+        "Just now you were ", "Moments ago you were ", "You were just ",
+        "A little while ago you were ", "Not long ago you were ", "Recently you were ",
+        "Earlier today you were ", "Earlier you were ", "A few hours ago you were ",
+        "Yesterday you were ", "Last session you were ",
+        "A few days ago you were ", "A couple days ago you were ",
+        "Last Monday you were ", "Last Tuesday you were ", "Last Wednesday you were ",
+        "Last Thursday you were ", "Last Friday you were ",
+        "Last Saturday you were ", "Last Sunday you were ",
+        "You left off ", "Your last change was ", "Last change: ",
+        "You were in the middle of ", "You were ",
+        "In Limn: ", "In limn: ",  // common project prefixes
+    ];
+    let trimmed = s.trim();
+    for prefix in &prefixes {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return rest.to_string();
+        }
+    }
+    // Also strip generic "In {Project}: " pattern
+    if trimmed.starts_with("In ") {
+        if let Some(colon_pos) = trimmed.find(": ") {
+            if colon_pos < 30 {
+                return trimmed[colon_pos + 2..].to_string();
+            }
+        }
+    }
+    trimmed.to_string()
 }
 
 /// Simple word-overlap similarity (Jaccard index on word sets)
