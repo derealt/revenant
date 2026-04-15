@@ -72,8 +72,16 @@ __revenant_heartbeat() {
         local now=$(date +%s)
         local elapsed=$((now - ghost_start))
 
-        # If we've been active for 5+ minutes, clear the ghost
-        if [[ ${elapsed} -ge 300 ]]; then
+        # Read TTL from metadata (default 120s if missing)
+        local ttl=120
+        if [[ -f "${REVENANT_META}" ]]; then
+            local meta_ttl
+            meta_ttl=$(python3 -c "import json; print(json.load(open('${REVENANT_META}'))['ttl_seconds'])" 2>/dev/null)
+            [[ -n "${meta_ttl}" ]] && ttl="${meta_ttl}"
+        fi
+
+        # If we've been active past the TTL, clear the ghost
+        if [[ ${elapsed} -ge ${ttl} ]]; then
             rm -f "${REVENANT_MOTD}" "${REVENANT_META}" "${REVENANT_ACTIVE_FILE}" 2>/dev/null
         fi
     fi

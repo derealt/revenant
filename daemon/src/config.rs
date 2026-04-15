@@ -36,7 +36,7 @@ pub struct DaemonConfig {
 
 fn default_poll_interval() -> u64 { 5 }
 fn default_absence_threshold() -> u64 { 15 }
-fn default_ghost_ttl() -> u64 { 5 }
+fn default_ghost_ttl() -> u64 { 2 }
 fn default_max_cards() -> u64 { 100 }
 fn default_prune_days() -> u64 { 30 }
 fn default_pid_file() -> String { "~/.revenant/revenant.pid".into() }

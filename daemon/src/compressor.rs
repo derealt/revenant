@@ -1423,6 +1423,13 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
         next_step
     };
 
+    // Scale TTL with absence: quick return → 60s, medium → 120s, long → 180s
+    let ttl_seconds = match depth {
+        CardDepth::Terse => 60,
+        CardDepth::Standard => 120,
+        CardDepth::Rich => 180,
+    };
+
     ContextCard {
         id: card_id,
         project_dir: state.project_dir.clone(),
@@ -1431,7 +1438,7 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
         next_step,
         created_at: Utc::now(),
         signals_json: serde_json::to_string(state).unwrap_or_default(),
-        ttl_seconds: 300,
+        ttl_seconds,
     }
 }
 
