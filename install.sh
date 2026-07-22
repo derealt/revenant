@@ -20,8 +20,8 @@ echo "  │"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
-if [ "$OS" != "darwin" ]; then
-  echo "  │  ✘ Currently macOS only. Linux coming soon."
+if [ "$OS" != "darwin" ] && [ "$OS" != "linux" ]; then
+  echo "  │  ✘ Unsupported platform: $OS (macOS and Linux are supported)"
   echo "  └───"
   exit 1
 fi

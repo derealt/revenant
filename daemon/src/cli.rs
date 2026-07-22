@@ -159,10 +159,12 @@ fn pid_file() -> PathBuf {
     revenant_dir().join("revenant.pid")
 }
 
+#[cfg(target_os = "macos")]
 fn plist_label() -> &'static str {
     "com.revenant.daemon"
 }
 
+#[cfg(target_os = "macos")]
 fn plist_path() -> PathBuf {
     home_dir()
         .join("Library/LaunchAgents")
@@ -312,7 +314,11 @@ fn daemon_uptime(pid: u32) -> Option<String> {
     }
 }
 
-fn launchctl_load() -> Result<()> {
+// ─── Daemon Lifecycle (platform-specific) ────────────────────────────
+// macOS: LaunchAgent + launchctl. Linux: systemd user unit + systemctl.
+
+#[cfg(target_os = "macos")]
+fn daemon_start() -> Result<()> {
     let plist = plist_path();
     if !plist.exists() {
         bail!(
@@ -337,7 +343,8 @@ fn launchctl_load() -> Result<()> {
     Ok(())
 }
 
-fn launchctl_unload() -> Result<()> {
+#[cfg(target_os = "macos")]
+fn daemon_stop() -> Result<()> {
     let plist = plist_path();
     if !plist.exists() {
         bail!(
@@ -360,6 +367,144 @@ fn launchctl_unload() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Write the LaunchAgent plist; returns the path for init's report
+#[cfg(target_os = "macos")]
+fn install_daemon_service(daemon_bin: &Path, log_dir: &Path) -> Result<PathBuf> {
+    let plist = plist_path();
+    let plist_dir = plist.parent().unwrap();
+    std::fs::create_dir_all(plist_dir)?;
+
+    let plist_content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{bin}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{log_dir}/revenant.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{log_dir}/revenant.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_LOG</key>
+        <string>revenant=info</string>
+    </dict>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>"#,
+        label = plist_label(),
+        bin = daemon_bin.display(),
+        log_dir = log_dir.display(),
+    );
+
+    std::fs::write(&plist, &plist_content)?;
+    Ok(plist)
+}
+
+#[cfg(target_os = "linux")]
+fn systemd_unit_path() -> PathBuf {
+    home_dir().join(".config/systemd/user/revenant.service")
+}
+
+#[cfg(target_os = "linux")]
+fn daemon_start() -> Result<()> {
+    if !systemd_unit_path().exists() {
+        bail!(
+            "systemd unit not found at {}. Run `rvn init` first.",
+            systemd_unit_path().display()
+        );
+    }
+    let output = Command::new("systemctl")
+        .args(["--user", "enable", "--now", "revenant.service"])
+        .output()
+        .context("failed to run systemctl")?;
+    if !output.status.success() {
+        bail!(
+            "systemctl enable --now failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn daemon_stop() -> Result<()> {
+    let output = Command::new("systemctl")
+        .args(["--user", "disable", "--now", "revenant.service"])
+        .output()
+        .context("failed to run systemctl")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("not loaded") || stderr.contains("does not exist") {
+            println!("\x1b[33mrevenant is not currently running\x1b[0m");
+        } else {
+            bail!("systemctl disable --now failed: {}", stderr);
+        }
+    }
+    Ok(())
+}
+
+/// Write the systemd user unit; returns the path for init's report
+#[cfg(target_os = "linux")]
+fn install_daemon_service(daemon_bin: &Path, log_dir: &Path) -> Result<PathBuf> {
+    let unit = systemd_unit_path();
+    std::fs::create_dir_all(unit.parent().unwrap())?;
+
+    let unit_content = format!(
+        "[Unit]\n\
+         Description=REVENANT cognitive context daemon\n\n\
+         [Service]\n\
+         ExecStart={bin}\n\
+         Restart=on-failure\n\
+         Environment=RUST_LOG=revenant=info\n\
+         StandardOutput=append:{log_dir}/revenant.out.log\n\
+         StandardError=append:{log_dir}/revenant.err.log\n\
+         Nice=10\n\n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        bin = daemon_bin.display(),
+        log_dir = log_dir.display(),
+    );
+
+    std::fs::write(&unit, unit_content)?;
+    let _ = Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .output();
+    Ok(unit)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn daemon_start() -> Result<()> {
+    bail!("daemon lifecycle is not supported on this platform yet")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn daemon_stop() -> Result<()> {
+    bail!("daemon lifecycle is not supported on this platform yet")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn install_daemon_service(_daemon_bin: &Path, _log_dir: &Path) -> Result<PathBuf> {
+    bail!("daemon lifecycle is not supported on this platform yet")
 }
 
 // ─── Command Implementations ─────────────────────────────────────────
@@ -411,93 +556,31 @@ fn cmd_init() -> Result<()> {
         .and_then(|p| p.parent().map(|d| d.join("revenant")))
         .unwrap_or_else(|| PathBuf::from("/usr/local/bin/revenant"));
 
-    // 6. Create macOS LaunchAgent plist
-    let plist = plist_path();
-    let plist_dir = plist.parent().unwrap();
-    std::fs::create_dir_all(plist_dir)?;
-
+    // 6. Install the daemon service (LaunchAgent on macOS, systemd user
+    //    unit on Linux)
     let log_dir = rev_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
+    let service_path = install_daemon_service(&daemon_bin, &log_dir)?;
+    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m {}", service_path.display());
 
-    let plist_content = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{label}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{bin}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>{log_dir}/revenant.out.log</string>
-    <key>StandardErrorPath</key>
-    <string>{log_dir}/revenant.err.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>RUST_LOG</key>
-        <string>revenant=info</string>
-    </dict>
-    <key>ProcessType</key>
-    <string>Background</string>
-    <key>LowPriorityIO</key>
-    <true/>
-    <key>Nice</key>
-    <integer>10</integer>
-</dict>
-</plist>"#,
-        label = plist_label(),
-        bin = daemon_bin.display(),
-        log_dir = log_dir.display(),
-    );
+    // 7. Add shell hooks: zsh and bash, whichever the user has
+    add_shell_hook(
+        &home_dir().join(".zshrc"),
+        "revenant.zsh",
+        "[ -f ~/.config/revenant/revenant.zsh ] && source ~/.config/revenant/revenant.zsh",
+        cfg!(target_os = "macos"), // zsh is the macOS default: create if missing
+    )?;
+    add_shell_hook(
+        &home_dir().join(".bashrc"),
+        "revenant.bash",
+        "[ -f ~/.config/revenant/revenant.bash ] && source ~/.config/revenant/revenant.bash",
+        cfg!(target_os = "linux"), // bash is the usual Linux default
+    )?;
 
-    std::fs::write(&plist, &plist_content)?;
-    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m {}", plist.display());
-
-    // 7. Add shell hook to .zshrc if not already present
-    let zshrc = home_dir().join(".zshrc");
-    let hook_line =
-        "[ -f ~/.config/revenant/revenant.zsh ] && source ~/.config/revenant/revenant.zsh";
-
-    let already_hooked = if zshrc.exists() {
-        let contents = std::fs::read_to_string(&zshrc)?;
-        contents.contains("revenant.zsh")
-    } else {
-        false
-    };
-
-    if !already_hooked {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&zshrc)?;
-        writeln!(file)?;
-        writeln!(file, "# REVENANT - cognitive context restoration")?;
-        writeln!(file, "{}", hook_line)?;
-        println!(
-            "\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m shell hook added to {}",
-            zshrc.display()
-        );
-    } else {
-        println!(
-            "\x1b[2m\u{2502}\x1b[0m \x1b[33m~\x1b[0m shell hook already in {}",
-            zshrc.display()
-        );
-    }
-
-    // 8. Load the LaunchAgent
+    // 8. Start the daemon
     println!("\x1b[2m\u{2502}\x1b[0m");
     println!("\x1b[2m\u{2502}\x1b[0m loading daemon...");
-    match launchctl_load() {
+    match daemon_start() {
         Ok(()) => println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m daemon loaded"),
         Err(e) => println!("\x1b[2m\u{2502}\x1b[0m \x1b[31m!\x1b[0m daemon load failed: {e}"),
     }
@@ -706,14 +789,52 @@ fn cmd_history(project: Option<String>, count: usize) -> Result<()> {
     Ok(())
 }
 
+/// Append a guarded source line to a shell rc file, once
+fn add_shell_hook(
+    rc_file: &Path,
+    marker: &str,
+    hook_line: &str,
+    create_if_missing: bool,
+) -> Result<()> {
+    if !rc_file.exists() && !create_if_missing {
+        return Ok(());
+    }
+    let already_hooked = rc_file.exists()
+        && std::fs::read_to_string(rc_file)
+            .map(|c| c.contains(marker))
+            .unwrap_or(false);
+
+    if already_hooked {
+        println!(
+            "\x1b[2m\u{2502}\x1b[0m \x1b[33m~\x1b[0m shell hook already in {}",
+            rc_file.display()
+        );
+        return Ok(());
+    }
+
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(rc_file)?;
+    writeln!(file)?;
+    writeln!(file, "# REVENANT - cognitive context restoration")?;
+    writeln!(file, "{}", hook_line)?;
+    println!(
+        "\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m shell hook added to {}",
+        rc_file.display()
+    );
+    Ok(())
+}
+
 fn cmd_off() -> Result<()> {
-    launchctl_unload()?;
+    daemon_stop()?;
     println!("\x1b[2mrevenant resting\x1b[0m");
     Ok(())
 }
 
 fn cmd_on() -> Result<()> {
-    launchctl_load()?;
+    daemon_start()?;
     println!("\x1b[2mrevenant waking\x1b[0m");
 
     // Wait briefly and verify

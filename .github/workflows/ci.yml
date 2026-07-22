@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  daemon:
+    name: daemon (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        run: cargo test --manifest-path daemon/Cargo.toml
+      - name: Build release
+        run: cargo build --release --manifest-path daemon/Cargo.toml
+      - name: Package linux artifact
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p out
+          tar -czf out/revenant-linux-x86_64.tar.gz -C daemon/target/release revenant rvn
+      - name: Upload linux artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: revenant-linux-x86_64
+          path: out/revenant-linux-x86_64.tar.gz
+
+  extensions:
+    name: extensions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build browser extension
+        working-directory: ghosts/browser
+        run: |
+          npm ci
+          npm run build
+      - name: Build editor extension
+        working-directory: ghosts/vscode
+        run: |
+          npm ci
+          npm run build
