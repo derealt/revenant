@@ -82,7 +82,10 @@ async fn main() -> Result<()> {
     let (switch_tx, mut switch_rx) = mpsc::channel::<SwitchEvent>(32);
 
     // Spawn ghost HTTP server for browser extension polling and tab reports
-    let ghost_http = Arc::new(ghost::http::GhostHttpServer::new(config.signals.browser));
+    let ghost_http = Arc::new(ghost::http::GhostHttpServer::new(
+        config.signals.browser,
+        config.ghosts.browser_config.banner_seconds,
+    ));
     let ghost_http_server = Arc::clone(&ghost_http);
     tokio::spawn(async move {
         ghost_http_server.serve(7711).await;

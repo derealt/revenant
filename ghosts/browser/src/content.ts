@@ -16,6 +16,8 @@ interface ContextCard {
 
 const BANNER_ID = 'revenant-ghost-banner';
 
+let bannerFadeTimer: number | undefined;
+
 // ─── Banner Rendering ──────────────────────────────────────────────
 
 function showBanner(card: ContextCard): void {
@@ -78,9 +80,23 @@ function showBanner(card: ContextCard): void {
   requestAnimationFrame(() => {
     banner.classList.add('revenant-visible');
   });
+
+  // Ghosts are transient: the daemon serves the banner TTL in
+  // ttl_seconds (1 minute by default, configurable in config.toml).
+  // This local timer is the backstop so the banner dies even if no
+  // poll delivers the clear.
+  if (bannerFadeTimer !== undefined) {
+    clearTimeout(bannerFadeTimer);
+  }
+  const ttl = card.ttl_seconds > 0 ? card.ttl_seconds : 60;
+  bannerFadeTimer = window.setTimeout(() => removeBanner(), ttl * 1000);
 }
 
 function removeBanner(): void {
+  if (bannerFadeTimer !== undefined) {
+    clearTimeout(bannerFadeTimer);
+    bannerFadeTimer = undefined;
+  }
   const existing = document.getElementById(BANNER_ID);
   if (existing) {
     existing.classList.remove('revenant-visible');

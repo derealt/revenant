@@ -228,6 +228,11 @@ function injectGhost(card: ContextCard): void {
   renderGhost(card);
   updateStatusBar(card);
 
+  // Ghosts are transient: 1 minute by default, configurable upward
+  const ghostSeconds = vscode.workspace
+    .getConfiguration('revenant')
+    .get<number>('ghostSeconds', 60);
+
   // The north star: offer to put the cursor back where your head was
   if (card.anchor && fs.existsSync(card.anchor.file)) {
     const anchorName = path.basename(card.anchor.file);
@@ -249,7 +254,7 @@ function injectGhost(card: ContextCard): void {
   }
   ghostTimer = setTimeout(() => {
     clearAllGhosts();
-  }, card.ttl_seconds * 1000);
+  }, ghostSeconds * 1000);
 }
 
 /**
@@ -372,9 +377,13 @@ function clearAllGhosts(): void {
 function checkGhostExpiry(): void {
   if (!activeGhostCard || !activityTracker) return;
 
-  // If user has been active for longer than TTL, clear the ghost
+  // If user has been active for longer than the configured ghost
+  // lifetime, clear the ghost
+  const ghostSeconds = vscode.workspace
+    .getConfiguration('revenant')
+    .get<number>('ghostSeconds', 60);
   const activeSeconds = activityTracker.activeSeconds();
-  if (activeSeconds >= activeGhostCard.ttl_seconds) {
+  if (activeSeconds >= ghostSeconds) {
     console.log(
       `REVENANT: ghost expired after ${activeSeconds}s of activity`
     );

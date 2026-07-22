@@ -89,6 +89,11 @@ channel_id = ""
 # Unix socket for communicating with the VS Code extension
 socket_path = "~/.revenant/vscode.sock"
 
+[ghosts.browser]
+# How long the browser banner stays up (seconds). It goes off after
+# 1 minute by default; raise this if you want it to linger.
+banner_seconds = 60
+
 [ghosts.obsidian]
 # Vault path
 vault_path = ""

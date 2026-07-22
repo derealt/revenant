@@ -18,32 +18,91 @@ use crate::signals::browser::BrowserTab;
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const CLEAR_JSON: &str = r#"{"type":"clear"}"#;
 
+/// The current ghost plus when it was injected, so it can expire.
+/// Ghosts are transient by design: without this, the browser banner
+/// would be served forever.
+struct CurrentGhost {
+    json: String,
+    injected_at: std::time::Instant,
+    ttl: std::time::Duration,
+}
+
+impl CurrentGhost {
+    fn cleared() -> Self {
+        Self {
+            json: CLEAR_JSON.to_string(),
+            injected_at: std::time::Instant::now(),
+            ttl: std::time::Duration::MAX,
+        }
+    }
+
+    fn expired(&self) -> bool {
+        self.injected_at.elapsed() > self.ttl
+    }
+}
+
 /// Holds the current ghost card as JSON string, set by the dispatcher.
 pub struct GhostHttpServer {
-    current_json: Arc<Mutex<String>>,
+    current: Arc<Mutex<CurrentGhost>>,
     /// Whether POSTed tab reports are stored (config: signals.browser)
     accept_tab_reports: bool,
+    /// Banner lifetime cap (config: ghosts.browser.banner_seconds).
+    /// The banner goes off after 1 minute by default; users may raise it.
+    banner_seconds: u64,
+}
+
+/// Cap the card's TTL to the configured banner lifetime and rewrite
+/// ttl_seconds in the served JSON, so the page-side fade timer and the
+/// server-side expiry always agree.
+fn effective_ghost(card_json: &str, cap_secs: u64) -> (String, std::time::Duration) {
+    match serde_json::from_str::<serde_json::Value>(card_json) {
+        Ok(mut v) => {
+            let secs = v
+                .get("card")
+                .and_then(|c| c.get("ttl_seconds"))
+                .and_then(|t| t.as_u64())
+                .unwrap_or(cap_secs)
+                .min(cap_secs);
+            if let Some(card) = v.get_mut("card") {
+                card["ttl_seconds"] = serde_json::json!(secs);
+            }
+            (
+                serde_json::to_string(&v).unwrap_or_else(|_| card_json.to_string()),
+                std::time::Duration::from_secs(secs),
+            )
+        }
+        Err(_) => (
+            card_json.to_string(),
+            std::time::Duration::from_secs(cap_secs),
+        ),
+    }
 }
 
 impl GhostHttpServer {
-    pub fn new(accept_tab_reports: bool) -> Self {
+    pub fn new(accept_tab_reports: bool, banner_seconds: u64) -> Self {
         Self {
-            current_json: Arc::new(Mutex::new(CLEAR_JSON.to_string())),
+            current: Arc::new(Mutex::new(CurrentGhost::cleared())),
             accept_tab_reports,
+            banner_seconds: banner_seconds.max(1),
         }
     }
 
     /// Set the current ghost card (called by dispatcher on Return events)
     pub fn inject(&self, card_json: String) {
-        if let Ok(mut j) = self.current_json.lock() {
-            *j = card_json;
+        let (json, ttl) = effective_ghost(&card_json, self.banner_seconds);
+        if let Ok(mut g) = self.current.lock() {
+            *g = CurrentGhost {
+                json,
+                ttl,
+                injected_at: std::time::Instant::now(),
+            };
         }
     }
 
     /// Clear the current ghost (called by dispatcher on reap/departure)
     pub fn clear(&self) {
-        if let Ok(mut j) = self.current_json.lock() {
-            *j = CLEAR_JSON.to_string();
+        if let Ok(mut g) = self.current.lock() {
+            *g = CurrentGhost::cleared();
         }
     }
 
@@ -58,8 +117,9 @@ impl GhostHttpServer {
         };
         info!("ghost http server listening on {}", addr);
 
-        let json = self.current_json.clone();
+        let current = self.current.clone();
         let accept_tab_reports = self.accept_tab_reports;
+        let banner_seconds = self.banner_seconds;
 
         loop {
             let (mut stream, _) = match listener.accept().await {
@@ -67,7 +127,7 @@ impl GhostHttpServer {
                 Err(_) => continue,
             };
 
-            let json = json.clone();
+            let current = current.clone();
 
             tokio::spawn(async move {
                 let request = match read_request(&mut stream).await {
@@ -79,9 +139,16 @@ impl GhostHttpServer {
                 let response = match (method, path) {
                     ("OPTIONS", _) => cors_response("204 No Content", ""),
                     ("GET", _) => {
-                        let body = json
+                        // Ghosts are transient: an expired card is served
+                        // (and stored) as cleared
+                        let body = current
                             .lock()
-                            .map(|j| j.clone())
+                            .map(|mut g| {
+                                if g.expired() {
+                                    *g = CurrentGhost::cleared();
+                                }
+                                g.json.clone()
+                            })
                             .unwrap_or_else(|_| CLEAR_JSON.to_string());
                         cors_response("200 OK", &body)
                     }
@@ -106,8 +173,13 @@ impl GhostHttpServer {
                             Ok(v) if v.get("type").and_then(|t| t.as_str()) == Some("inject")
                                 && v.get("card").is_some() =>
                             {
-                                if let Ok(mut j) = json.lock() {
-                                    *j = body.to_string();
+                                let (json, ttl) = effective_ghost(body, banner_seconds);
+                                if let Ok(mut g) = current.lock() {
+                                    *g = CurrentGhost {
+                                        json,
+                                        ttl,
+                                        injected_at: std::time::Instant::now(),
+                                    };
                                 }
                                 cors_response("204 No Content", "")
                             }
@@ -115,8 +187,8 @@ impl GhostHttpServer {
                         }
                     }
                     ("POST", "/clear") => {
-                        if let Ok(mut j) = json.lock() {
-                            *j = CLEAR_JSON.to_string();
+                        if let Ok(mut g) = current.lock() {
+                            *g = CurrentGhost::cleared();
                         }
                         cors_response("204 No Content", "")
                     }
@@ -199,4 +271,33 @@ fn cors_response(status: &str, body: &str) -> String {
 
 async fn respond(stream: &mut tokio::net::TcpStream, response: &str) {
     let _ = stream.write_all(response.as_bytes()).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn banner_ttl_is_capped_and_rewritten() {
+        // A 5-minute card is served as a 60s banner by default
+        let five_min = r#"{"type":"inject","card":{"id":"x","ttl_seconds":300}}"#;
+        let (json, ttl) = effective_ghost(five_min, 60);
+        assert_eq!(ttl.as_secs(), 60);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["card"]["ttl_seconds"], 60);
+
+        // Users may raise the cap; shorter card TTLs are still honored
+        let (_, ttl) = effective_ghost(five_min, 600);
+        assert_eq!(ttl.as_secs(), 300);
+        let short = r#"{"type":"inject","card":{"id":"x","ttl_seconds":30}}"#;
+        let (_, ttl) = effective_ghost(short, 60);
+        assert_eq!(ttl.as_secs(), 30);
+
+        // Missing TTL falls back to the cap
+        let none = r#"{"type":"inject","card":{"id":"x"}}"#;
+        let (json, ttl) = effective_ghost(none, 60);
+        assert_eq!(ttl.as_secs(), 60);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["card"]["ttl_seconds"], 60);
+    }
 }

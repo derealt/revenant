@@ -48,6 +48,12 @@
           "minimum": 0.1,
           "maximum": 1.0,
           "description": "Opacity of ghost annotations"
+        },
+        "revenant.ghostSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 10,
+          "description": "How long a ghost annotation stays visible, in seconds. Goes off after 1 minute by default; raise it if you want ghosts to linger."
         }
       }
     }

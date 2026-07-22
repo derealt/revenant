@@ -404,7 +404,7 @@ async fn http_server_serves_inject_and_clear() {
     use std::sync::Arc;
 
     let port = 17711u16;
-    let server = Arc::new(GhostHttpServer::new(false));
+    let server = Arc::new(GhostHttpServer::new(false, 60));
     let serve = Arc::clone(&server);
     tokio::spawn(async move { serve.serve(port).await });
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -459,6 +459,17 @@ async fn http_server_serves_inject_and_clear() {
     // Unknown paths 404
     let resp = post("/nope", "").await;
     assert!(resp.starts_with("HTTP/1.1 404"), "got: {resp}");
+
+    // Ghosts are transient: a card expires off the wire by its TTL
+    let brief = r#"{"type":"inject","card":{"id":"t2","summary":"Brief ghost.","next_step":"","project_dir":"/tmp/x","project_name":"x","ttl_seconds":1}}"#;
+    let resp = post("/inject", brief).await;
+    assert!(resp.starts_with("HTTP/1.1 204"), "got: {resp}");
+    assert!(get().await.contains("Brief ghost."), "fresh card should be served");
+    tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+    assert!(
+        get().await.contains(r#"{"type":"clear"}"#),
+        "expired card must be served as cleared"
+    );
 }
 
 #[tokio::test]

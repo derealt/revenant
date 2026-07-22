@@ -127,6 +127,26 @@ pub struct GhostsConfig {
     pub vscode_config: VscodeGhostConfig,
     #[serde(default, rename = "obsidian")]
     pub obsidian_config: ObsidianGhostConfig,
+    #[serde(default, rename = "browser")]
+    pub browser_config: BrowserGhostConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserGhostConfig {
+    /// How long the browser banner stays up, in seconds. The banner goes
+    /// off after 1 minute by default; raise this to keep it longer.
+    #[serde(default = "default_banner_seconds")]
+    pub banner_seconds: u64,
+}
+
+fn default_banner_seconds() -> u64 { 60 }
+
+impl Default for BrowserGhostConfig {
+    fn default() -> Self {
+        Self {
+            banner_seconds: default_banner_seconds(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -218,6 +238,7 @@ impl Default for RevenantConfig {
                 slack_config: SlackGhostConfig::default(),
                 vscode_config: VscodeGhostConfig::default(),
                 obsidian_config: ObsidianGhostConfig::default(),
+                browser_config: BrowserGhostConfig::default(),
             },
             storage: StorageConfig {
                 db_path: default_db_path(),
