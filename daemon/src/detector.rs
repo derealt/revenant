@@ -123,6 +123,11 @@ impl SwitchDetector {
         }
     }
 
+    /// The project the user is currently working in, if known
+    pub fn active_project(&self) -> Option<String> {
+        self.active_project.lock().ok()?.clone()
+    }
+
     /// Record that a ghost was displayed for a project
     pub fn mark_ghost_active(&self, project_dir: &str) {
         if let Ok(mut projects) = self.projects.lock() {

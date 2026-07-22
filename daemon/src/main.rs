@@ -133,7 +133,8 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Spawn polling loop (for time-based detection: absence, periodic snapshot)
+    // Spawn polling loop: time-based detection (ghost timeout) and
+    // git branch-change detection for the active project
     let poll_daemon = Arc::clone(&daemon);
     let poll_switch_tx = switch_tx.clone();
     tokio::spawn(async move {
@@ -145,6 +146,18 @@ async fn main() -> Result<()> {
             if let Some(event) = d.detector.check_time_based() {
                 if let Err(e) = poll_switch_tx.send(event).await {
                     warn!("failed to send time-based switch event: {e}");
+                }
+            }
+            // A branch switch inside the active project is a context
+            // switch too: restore the ghost for where the head went
+            if let Some(project) = d.detector.active_project() {
+                if let Ok(branch) = revenant::signals::git::current_branch(&project) {
+                    if let Some(event) = d.detector.check_branch_change(&project, &branch) {
+                        info!("branch change detected in {project}: now on {branch}");
+                        if let Err(e) = poll_switch_tx.send(event).await {
+                            warn!("failed to send branch-change event: {e}");
+                        }
+                    }
                 }
             }
         }
@@ -244,6 +257,10 @@ async fn main() -> Result<()> {
                             ghost_http.inject(serde_json::to_string(&card_json).unwrap_or_default());
                             if let Err(e) = d.dispatcher.dispatch(&card).await {
                                 error!("ghost dispatch failed: {e}");
+                            } else {
+                                // Feed the detector's timeout tracking so
+                                // check_time_based can clear this ghost
+                                d.detector.mark_ghost_active(&project_dir);
                             }
                         }
                         Ok(None) => {

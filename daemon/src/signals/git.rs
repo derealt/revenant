@@ -72,6 +72,12 @@ pub fn capture(project_dir: &str) -> Result<GitState> {
     })
 }
 
+/// Just the current branch: cheap enough to poll, used by the daemon's
+/// branch-change detection without paying for a full state capture
+pub fn current_branch(project_dir: &str) -> Result<String> {
+    git_branch(project_dir)
+}
+
 fn git_cmd(project_dir: &str, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(["-C", project_dir])
