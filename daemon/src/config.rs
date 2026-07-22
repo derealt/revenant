@@ -246,11 +246,12 @@ pub fn load_config() -> Result<RevenantConfig> {
     }
 }
 
+// Always ~/.config/revenant, matching the CLI and the documented layout
+// (dirs::config_dir() would resolve to Application Support on macOS)
 fn config_file_path() -> PathBuf {
-    let config_dir = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("revenant");
-    config_dir.join("config.toml")
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("~"))
+        .join(".config/revenant/config.toml")
 }
 
 impl CompressorConfig {

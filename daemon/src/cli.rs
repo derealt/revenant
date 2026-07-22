@@ -121,10 +121,11 @@ fn revenant_dir() -> PathBuf {
     home_dir().join(".revenant")
 }
 
+// Always ~/.config/revenant, on every platform. dirs::config_dir() would
+// give ~/Library/Application Support on macOS, which breaks the shell hook
+// (spaces in path) and contradicts the documented layout.
 fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| home_dir().join(".config"))
-        .join("revenant")
+    home_dir().join(".config").join("revenant")
 }
 
 fn config_file() -> PathBuf {
@@ -505,7 +506,7 @@ fn cmd_init() -> Result<()> {
     println!();
     println!("  Open a new terminal to activate the shell hook.");
     println!("  Run \x1b[36mrvn status\x1b[0m to verify the daemon is running.");
-    println!("  Run \x1b[36mrev test\x1b[0m to inject a synthetic ghost.");
+    println!("  Run \x1b[36mrvn test\x1b[0m to inject a synthetic ghost.");
 
     Ok(())
 }
@@ -554,10 +555,10 @@ fn cmd_status() -> Result<()> {
 
                     if let Some(project_dir) = matching_project {
                         if let Ok(Some(card)) = query_latest(&conn, project_dir) {
-                            let age = format_age(card.created_at);
+                            let age = format_age_ago(card.created_at);
                             println!("\x1b[2m\u{2502}\x1b[0m");
                             println!(
-                                "\x1b[2m\u{2502}\x1b[0m \x1b[2mlatest ({}, {} ago):\x1b[0m",
+                                "\x1b[2m\u{2502}\x1b[0m \x1b[2mlatest ({}, {}):\x1b[0m",
                                 card.project_name, age
                             );
                             println!("\x1b[2m\u{2502}\x1b[0m \x1b[36m{}\x1b[0m", card.summary);
@@ -681,10 +682,10 @@ fn cmd_history(project: Option<String>, count: usize) -> Result<()> {
     );
 
     for (i, card) in cards.iter().enumerate() {
-        let age = format_age(card.created_at);
+        let age = format_age_ago(card.created_at);
         println!("\x1b[2m\u{2502}\x1b[0m");
         println!(
-            "\x1b[2m\u{2502}\x1b[0m \x1b[2m[{}]\x1b[0m \x1b[35m{}\x1b[0m \x1b[2m({}) {} ago\x1b[0m",
+            "\x1b[2m\u{2502}\x1b[0m \x1b[2m[{}]\x1b[0m \x1b[35m{}\x1b[0m \x1b[2m({}) {}\x1b[0m",
             i + 1,
             card.project_name,
             card.project_dir,
@@ -1445,6 +1446,16 @@ fn cmd_digest(days: u64) -> Result<()> {
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────
+
+/// "5min ago", but "just now" without a dangling "ago"
+fn format_age_ago(dt: DateTime<Utc>) -> String {
+    let age = format_age(dt);
+    if age == "just now" {
+        age
+    } else {
+        format!("{age} ago")
+    }
+}
 
 fn format_age(dt: DateTime<Utc>) -> String {
     let now = Utc::now();
