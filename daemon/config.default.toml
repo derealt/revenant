@@ -6,8 +6,9 @@
 poll_interval = 5
 # Minutes of inactivity before a "departure" is detected
 absence_threshold_minutes = 15
-# Minutes of activity before ghosts self-destruct
-ghost_ttl_minutes = 5
+# Minutes of activity before ghosts self-destruct (card TTLs also scale
+# dynamically with how long you were away)
+ghost_ttl_minutes = 2
 # Days after which old context cards are pruned
 prune_after_days = 30
 # PID file location

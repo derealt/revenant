@@ -191,7 +191,7 @@ impl Default for RevenantConfig {
             daemon: DaemonConfig {
                 poll_interval: 5,
                 absence_threshold_minutes: 15,
-                ghost_ttl_minutes: 5,
+                ghost_ttl_minutes: 2,
                 prune_after_days: 30,
                 pid_file: default_pid_file(),
             },

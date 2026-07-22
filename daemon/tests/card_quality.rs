@@ -85,7 +85,7 @@ fn corpus() -> Vec<(&'static str, WorkingState, Vec<&'static str>)> {
         (
             "mid-fix with failing tests",
             state(
-                "arbiterd",
+                "harbord",
                 Some(git_state(
                     "fix/reconnect-race",
                     "fix: clear reconnect timer before retry",
@@ -101,7 +101,7 @@ fn corpus() -> Vec<(&'static str, WorkingState, Vec<&'static str>)> {
                     "git diff src/ws/reconnect.rs",
                 ])),
             ),
-            vec!["reconnect", "fix", "timer", "arbiterd"],
+            vec!["reconnect", "fix", "timer", "harbord"],
         ),
         (
             "feature build with new files",

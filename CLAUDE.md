@@ -32,14 +32,14 @@ REVENANT doesn't reduce context switches. It makes each one cost zero.
 ## Stack
 
 - **Daemon**: Rust (file watchers via `notify`, inotify/FSEvents, minimal CPU/memory footprint)
-- **Context capture**: Git state, file modification timestamps, editor state (via LSP or editor plugins), terminal history (zsh/bash history parsing), clipboard contents
-- **LLM compression**: Local model (Ollama/llama.cpp) or API (Claude/OpenAI) - converts raw state signals into a natural-language context card. The prompt: "Given these signals about what the user was doing, write a 2-sentence note: what they were trying to accomplish, and what their next step was. Write it as if leaving a note for yourself."
+- **Context capture**: Git state, file modification timestamps, editor state (recently edited files + VS Code workspace state), terminal history (zsh/bash history parsing), clipboard contents (opt-in), active browser tab (opt-in, reported by the extension)
+- **LLM compression**: Local model (Ollama) or API (Claude/OpenAI) - converts raw state signals into a natural-language context card. The prompt: "Given these signals about what the user was doing, write a 2-sentence note: what they were trying to accomplish, and what their next step was. Write it as if leaving a note for yourself." Default is the rule engine: no LLM, no network.
 - **Ghost injection**: Plugin architecture per tool:
-  - **VS Code / JetBrains**: Extension inserts a transient inline decoration (not a real comment - a visual overlay that doesn't modify the file)
+  - **VS Code**: Extension inserts a transient inline decoration (not a real comment - a visual overlay that doesn't modify the file)
   - **Terminal**: Writes to `~/.revenant/motd`, shell rc sources it on new session
-  - **Slack/Discord**: Bot posts ephemeral message (visible only to you)
-  - **Browser**: Extension shows a subtle banner on the last page you were reading
-  - **Obsidian/Notion**: Injects a transient block at the top of your last-edited note
+  - **Slack**: Go sidecar posts ephemeral message (visible only to you)
+  - **Browser**: Extension polls the daemon's localhost HTTP server and shows a subtle banner
+  - **Obsidian**: Plugin polls a state file and injects a transient callout block
 - **Storage**: SQLite - context cards indexed by project directory, timestamped, auto-pruned after 30 days
 - **Config**: TOML at `~/.config/revenant/config.toml`
 - **Zero network by default**: Runs entirely local. LLM calls are optional (rule-based context cards work without them, just less eloquent).
@@ -50,30 +50,40 @@ REVENANT doesn't reduce context switches. It makes each one cost zero.
 revenant/
 ├── daemon/                  # Rust: the invisible core
 │   ├── src/
-│   │   ├── main.rs          # Daemon lifecycle, signal handling, launchd/systemd integration
-│   │   ├── watcher.rs       # File system event aggregation (debounced, filtered by .gitignore)
+│   │   ├── lib.rs           # Library target: exposes all modules so tests drive real code
+│   │   ├── main.rs          # Daemon binary: lifecycle, signal handling, launchd integration
+│   │   ├── cli.rs           # rvn binary: standalone CLI (talks via SQLite/launchctl/HTTP)
+│   │   ├── watcher.rs       # File system event stream (filtered, transition-level events)
 │   │   ├── signals/
 │   │   │   ├── git.rs       # Git state: branch, status, recent commits, diff stats
-│   │   │   ├── editor.rs    # Open files, cursor positions, recent edits (via LSP or temp files)
+│   │   │   ├── editor.rs    # Recently edited files + VS Code workspace state
 │   │   │   ├── terminal.rs  # Recent commands from shell history, cwd
 │   │   │   ├── clipboard.rs # Last clipboard content (text only, never images)
-│   │   │   └── browser.rs   # Active tab URL + title (via native messaging)
+│   │   │   └── browser.rs   # Active tab, POSTed by the extension to the HTTP server
 │   │   ├── snapshot.rs      # Aggregates all signals into a WorkingState struct
-│   │   ├── detector.rs      # Context switch detection: project dir change, branch change, long absence, calendar event
-│   │   ├── compressor.rs    # WorkingState → ContextCard (rule-based or LLM)
+│   │   ├── detector.rs      # Context switch detection: project change, branch change, absence
+│   │   ├── compressor.rs    # WorkingState to ContextCard (rule engine or LLM)
 │   │   ├── store.rs         # SQLite persistence: save/load/prune context cards
-│   │   └── ghost.rs         # Ghost injection coordinator: dispatches to per-tool injectors
+│   │   └── ghost/           # Ghost injection: per-channel injectors + dispatcher
+│   │       ├── mod.rs       # GhostDispatcher: routes cards to enabled channels
+│   │       ├── http.rs      # localhost:7711 server: browser polling, /tab, /inject, /clear
+│   │       ├── terminal.rs  # motd writer
+│   │       ├── vscode.rs    # Unix socket client to the VS Code extension
+│   │       ├── slack.rs     # Unix socket client to the Go sidecar
+│   │       └── obsidian.rs  # State file the Obsidian plugin polls
+│   ├── tests/               # Integration tests driving the REAL library code
+│   │   ├── integration_test.rs  # capture/compress/store/motd/detector/http drives
+│   │   └── card_quality.rs      # Corpus drive holding cards to the quality bar
 │   ├── Cargo.toml
 │   └── config.default.toml
 ├── ghosts/                  # Per-tool ghost injectors
 │   ├── vscode/              # VS Code extension (TypeScript) - inline decorations
-│   ├── jetbrains/           # IntelliJ plugin (Kotlin) - inlay hints
 │   ├── terminal/            # Shell integration (zsh/bash/fish) - motd on session start
-│   ├── slack/               # Slack bot - ephemeral messages to self
-│   ├── browser/             # Chrome/Firefox extension - subtle banner
+│   ├── slack/               # Slack bot (Go sidecar) - ephemeral messages to self
+│   ├── browser/             # Chrome extension - banner; polls localhost:7711
 │   └── obsidian/            # Obsidian plugin - transient callout block
-├── models/                  # LLM prompt templates + rule-based fallback logic
-├── tests/                   # Integration tests: simulate context switch, verify ghost appears
+├── models/                  # compress.txt: the LLM prompt template
+├── docs/                    # demo-mock.html: static demo page
 └── CLAUDE.md
 ```
 
@@ -82,9 +92,10 @@ revenant/
 | File | Purpose |
 |------|---------|
 | `daemon/src/detector.rs` | The brain - detects when a context switch happens |
-| `daemon/src/compressor.rs` | Converts raw signals to human-readable context card |
-| `daemon/src/ghost.rs` | Dispatches context cards to the right tool at the right time |
+| `daemon/src/compressor.rs` | Converts raw signals to human-readable context card (the rule engine lives here) |
+| `daemon/src/ghost/mod.rs` | Dispatches context cards to the right tool at the right time |
 | `daemon/src/snapshot.rs` | Aggregates all signal sources into unified working state |
+| `daemon/tests/card_quality.rs` | Corpus drive for card quality; ignored printer test for eyeball review |
 | `ghosts/vscode/src/extension.ts` | VS Code ghost - inline decoration that self-destructs |
 | `ghosts/terminal/revenant.zsh` | Shell integration - prints context card on session start |
 | `models/compress.txt` | LLM prompt template for context card generation |

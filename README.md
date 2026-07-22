@@ -2,7 +2,7 @@
 
 **Cognitive context restoration.** An invisible daemon that captures what you were doing when you leave a task and restores it as ghost annotations in your existing tools when you return.
 
-No UI. No app to open. No notes to write. The ghost appears in your terminal, your editor, your browser - exactly where you return first. It self-destructs after 5 minutes of activity.
+No UI. No app to open. No notes to write. The ghost appears in your terminal, your editor, your browser - exactly where you return first. It self-destructs after a few minutes of activity (the TTL scales with how long you were away).
 
 ## The Problem
 
@@ -42,31 +42,39 @@ rvn init
 | Channel | How it appears | Setup |
 |---------|---------------|-------|
 | **Terminal** | MOTD on new shell tab | Automatic with `rvn init` |
-| **Chrome** | Banner at top of page | `rvn setup browser` |
-| **VS Code** | Inline decoration | `rvn setup vscode` |
-| **Obsidian** | Callout block | `rvn setup obsidian` |
-| **Slack** | Ephemeral message | `rvn setup slack` |
+| **Chrome** | Banner at top of page | `rvn setup browser` (build + load the extension; it polls the daemon on `localhost:7711`) |
+| **VS Code** | Inline decoration | `rvn setup vscode` (build + install the extension) |
+| **Obsidian** | Callout block | `rvn setup obsidian --vault /path/to/vault` |
+| **Slack** | Ephemeral message | `rvn setup slack` (advanced: needs a Slack app and a manually built Go sidecar; see below) |
 
 ## Commands
 
 ```bash
 rvn init              # First-time setup
-rvn status            # Daemon health + latest card
+rvn status            # Daemon health, channel status, latest card
 rvn history           # View past context cards
-rvn test              # Inject a test ghost
+rvn history -p DIR    #   ...for a specific project
+rvn history -n 20     #   ...more of them
+rvn test              # Inject a test ghost into every enabled channel
+rvn clear             # Dismiss the current ghost everywhere, immediately
+rvn digest            # Attention digest across projects (last 7 days)
+rvn digest --days 30  #   ...further back
 rvn setup llm         # Enable AI-powered cards (optional)
-rvn setup browser     # Install Chrome extension
-rvn setup vscode      # Install VS Code extension
+rvn setup browser     # Browser ghost setup instructions
+rvn setup vscode      # VS Code ghost setup instructions
+rvn setup obsidian    # Obsidian ghost setup (--vault enables it directly)
+rvn setup slack       # Slack ghost setup (--token/--user/--channel-id enable it)
 rvn off               # Stop the daemon
 rvn on                # Start the daemon
-rvn forget            # Delete context cards
+rvn forget            # Delete context cards for the current project
+rvn forget --all      # Delete ALL context cards
 ```
 
 ## What the Ghost Looks Like
 
 **Terminal:**
 ```
-┌─── REVENANT ─── arbiter ─── 2h ago ───
+┌─── REVENANT ─── harbor ─── 2h ago ───
 │ You were fixing the WebSocket subscription format and
 │ reconnection logic. 3 files changed, 45 lines added.
 │ Next: run the reconnect tests to verify your fix holds.
@@ -75,7 +83,19 @@ rvn forget            # Delete context cards
 
 **Chrome:**
 
-A subtle banner at the top of any webpage with your context summary and next step. Dismiss with X or it auto-clears after 5 minutes.
+A subtle banner at the top of any webpage with your context summary and next step. Dismiss with X or it auto-clears after 5 minutes. The extension polls the daemon at `http://127.0.0.1:7711/ghost`; nothing leaves your machine.
+
+Optionally, the extension can report your active tab back to the daemon as a context signal. This is OFF by default; the daemon discards tab reports unless you set `browser = true` under `[signals]` in the config.
+
+## Slack (advanced)
+
+The Slack ghost posts ephemeral messages (visible only to you) via a small Go sidecar that listens on `~/.revenant/slack.sock`. It is intentionally manual:
+
+1. Create a Slack app with `chat:write` scope, install it, and copy the bot token.
+2. `rvn setup slack --token xoxb-... --user U0XXXXXXX --channel-id C0XXXXXXX` writes the config and enables the channel.
+3. Build and run the sidecar yourself: `cd ghosts/slack && go build && ./revenant-slack`.
+
+If you skip step 3, the channel stays quiet; nothing else breaks.
 
 ## LLM Compression (Optional)
 
