@@ -1,7 +1,8 @@
-// REVENANT Ghost — Chrome Extension Background Service Worker
+// REVENANT Ghost - Chrome Extension Background Service Worker
 // Polls the local daemon's HTTP endpoint for ghost cards.
 
 const DAEMON_URL = "http://127.0.0.1:7711/ghost";
+const TAB_REPORT_URL = "http://127.0.0.1:7711/tab";
 const POLL_INTERVAL = 3000;
 
 interface ContextCard {
@@ -76,4 +77,32 @@ chrome.tabs.onActivated.addListener(async (info) => {
       chrome.tabs.sendMessage(info.tabId, { type: "showGhost", card: activeCard }).catch(() => {});
     }, 500);
   }
+});
+
+// Report the active tab to the daemon as a context signal.
+// The daemon discards these unless the user set `signals.browser = true`,
+// so nothing is stored without an explicit opt-in.
+async function reportActiveTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.url || !/^https?:/.test(tab.url)) return;
+    await fetch(TAB_REPORT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([
+        {
+          url: tab.url,
+          title: tab.title ?? "",
+          timestamp: Math.floor(Date.now() / 1000),
+        },
+      ]),
+    });
+  } catch {
+    // Daemon not running
+  }
+}
+
+chrome.tabs.onActivated.addListener(() => { reportActiveTab(); });
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+  if (changeInfo.status === "complete") reportActiveTab();
 });

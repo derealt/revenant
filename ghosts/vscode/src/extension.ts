@@ -1,9 +1,9 @@
 /**
- * REVENANT Ghost — VS Code Extension
+ * REVENANT Ghost - VS Code Extension
  *
  * Listens for context cards from the daemon via Unix socket and renders
  * them as transient inline decorations. These decorations are visual
- * overlays — they NEVER modify the actual file content.
+ * overlays - they NEVER modify the actual file content.
  *
  * The ghost appears as a subtle, dimmed annotation at the top of the
  * file where you last had your cursor. It self-destructs after the
@@ -52,7 +52,7 @@ export function activate(context: vscode.ExtensionContext): void {
     0
   );
   statusBarItem.text = '$(eye-closed)';
-  statusBarItem.tooltip = 'REVENANT — no active ghost';
+  statusBarItem.tooltip = 'REVENANT - no active ghost';
   statusBarItem.command = 'revenant.history';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
@@ -203,7 +203,7 @@ function injectGhost(card: ContextCard): void {
       (folder) => card.project_dir === folder.uri.fsPath
     );
     if (!match) {
-      // Card is for a different project — ignore
+      // Card is for a different project - ignore
       return;
     }
   }
@@ -245,7 +245,7 @@ function renderGhost(card: ContextCard): void {
   }
 
   // Create decoration type with inline "after" content
-  // This renders AFTER the first line of the file — purely visual
+  // This renders AFTER the first line of the file - purely visual
   ghostDecorationType = vscode.window.createTextEditorDecorationType({
     isWholeLine: true,
     after: {
@@ -278,7 +278,7 @@ function updateStatusBar(card: ContextCard | undefined): void {
     );
   } else {
     statusBarItem.text = '$(eye-closed)';
-    statusBarItem.tooltip = 'REVENANT — no active ghost';
+    statusBarItem.tooltip = 'REVENANT - no active ghost';
     statusBarItem.backgroundColor = undefined;
   }
 }

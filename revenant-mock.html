@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>REVENANT — Live Scenario</title>
+<title>REVENANT - Live Scenario</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
 
@@ -582,27 +582,27 @@
 
   <div class="scene-label">Real-time Scenario</div>
   <h1 class="scene-title">A day with REVENANT</h1>
-  <p class="scene-desc">You're a backend engineer working on a payments service. This is what happens when you context-switch three times in one day — with REVENANT running silently in the background.</p>
+  <p class="scene-desc">You're a backend engineer working on a payments service. This is what happens when you context-switch three times in one day - with REVENANT running silently in the background.</p>
 
   <div class="divider"></div>
 
   <!-- ═══ SCENE 1: MORNING WORK ═══ -->
   <div class="scenario-step">
-    <div class="scene-time">9:14 AM — Deep in the code</div>
+    <div class="scene-time">9:14 AM - Deep in the code</div>
     <div class="step-header">
       <div class="step-num">1</div>
       <div class="step-title">You're debugging a race condition</div>
     </div>
-    <p class="step-desc">You've been tracing a bug for 40 minutes. You found it — the WebSocket reconnect timer isn't cleared on successful connection, causing duplicate reconnections under network jitter. You're about to write the fix.</p>
+    <p class="step-desc">You've been tracing a bug for 40 minutes. You found it - the WebSocket reconnect timer isn't cleared on successful connection, causing duplicate reconnections under network jitter. You're about to write the fix.</p>
 
     <div class="step-mock">
-      <div class="no-ghost-label">Your editor — no ghost (you never left)</div>
+      <div class="no-ghost-label">Your editor - no ghost (you never left)</div>
       <div class="vscode">
         <div class="vscode-titlebar">
           <div class="traffic-dot dot-red"></div>
           <div class="traffic-dot dot-yellow"></div>
           <div class="traffic-dot dot-green"></div>
-          <div class="vscode-titlebar-text">websocket.ts — payments-service</div>
+          <div class="vscode-titlebar-text">websocket.ts - payments-service</div>
         </div>
         <div class="vscode-body">
           <div class="vscode-sidebar">
@@ -648,11 +648,11 @@
     </div>
   </div>
 
-  <div class="arrow-down">&#8595; 9:15 AM — Calendar notification: "Sprint Planning" &#8595;</div>
+  <div class="arrow-down">&#8595; 9:15 AM - Calendar notification: "Sprint Planning" &#8595;</div>
 
   <!-- ═══ SCENE 2: YOU LEAVE ═══ -->
   <div class="scenario-step">
-    <div class="scene-time">9:15 AM — You close the laptop for a 1-hour meeting</div>
+    <div class="scene-time">9:15 AM - You close the laptop for a 1-hour meeting</div>
     <div class="step-header">
       <div class="step-num">2</div>
       <div class="step-title">REVENANT snapshots your context (invisible)</div>
@@ -662,23 +662,23 @@
 
   <div class="arrow-down">&#8595; 1 hour passes. Sprint planning. You talked about 6 different tickets. &#8595;</div>
 
-  <!-- ═══ SCENE 3: YOU RETURN — VS CODE ═══ -->
+  <!-- ═══ SCENE 3: YOU RETURN - VS CODE ═══ -->
   <div class="scenario-step">
-    <div class="scene-time">10:22 AM — You open VS Code</div>
+    <div class="scene-time">10:22 AM - You open VS Code</div>
     <div class="step-header">
       <div class="step-num">3</div>
       <div class="step-title">The ghost appears in your editor</div>
     </div>
-    <p class="step-desc">VS Code reopens with your files. But now there's something at the top — a faint teal annotation that wasn't there before. It takes you 8 seconds to read it. You're back.</p>
+    <p class="step-desc">VS Code reopens with your files. But now there's something at the top - a faint teal annotation that wasn't there before. It takes you 8 seconds to read it. You're back.</p>
 
     <div class="step-mock">
-      <div class="with-ghost-label">Your editor — ghost active</div>
+      <div class="with-ghost-label">Your editor - ghost active</div>
       <div class="vscode">
         <div class="vscode-titlebar">
           <div class="traffic-dot dot-red"></div>
           <div class="traffic-dot dot-yellow"></div>
           <div class="traffic-dot dot-green"></div>
-          <div class="vscode-titlebar-text">websocket.ts — payments-service</div>
+          <div class="vscode-titlebar-text">websocket.ts - payments-service</div>
         </div>
         <div class="vscode-body">
           <div class="vscode-sidebar">
@@ -705,7 +705,7 @@
                 <div class="ghost-icon">&#9776;</div>
                 <div class="ghost-content">
                   <div class="ghost-label">REVENANT</div>
-                  <div class="ghost-text">You were fixing a race condition in <strong>WebSocketClient.connect()</strong>. The reconnect timer at line 47 isn't cleared on successful connection — causing duplicate connections under network jitter. <strong>Next:</strong> add <code style="background:rgba(78,234,219,0.1);padding:1px 4px;border-radius:2px;font-family:var(--mono);font-size:11px;color:#4eeadb;">clearTimeout(this.reconnectTimer)</code> before line 49, then run the 2 failing tests in <code style="background:rgba(78,234,219,0.1);padding:1px 4px;border-radius:2px;font-family:var(--mono);font-size:11px;color:#4eeadb;">reconnect.test.ts</code>.</div>
+                  <div class="ghost-text">You were fixing a race condition in <strong>WebSocketClient.connect()</strong>. The reconnect timer at line 47 isn't cleared on successful connection - causing duplicate connections under network jitter. <strong>Next:</strong> add <code style="background:rgba(78,234,219,0.1);padding:1px 4px;border-radius:2px;font-family:var(--mono);font-size:11px;color:#4eeadb;">clearTimeout(this.reconnectTimer)</code> before line 49, then run the 2 failing tests in <code style="background:rgba(78,234,219,0.1);padding:1px 4px;border-radius:2px;font-family:var(--mono);font-size:11px;color:#4eeadb;">reconnect.test.ts</code>.</div>
                   <div class="ghost-meta">1hr 7min ago &middot; auto-dissolves in 5 min</div>
                 </div>
                 <button class="ghost-dismiss">dismiss</button>
@@ -734,7 +734,7 @@
 
   <!-- ═══ SCENE 4: TERMINAL ═══ -->
   <div class="scenario-step">
-    <div class="scene-time">10:22 AM — You open a terminal</div>
+    <div class="scene-time">10:22 AM - You open a terminal</div>
     <div class="step-header">
       <div class="step-num">4</div>
       <div class="step-title">The ghost is in your terminal too</div>
@@ -742,18 +742,18 @@
     <p class="step-desc">You open a new terminal tab. Before the prompt appears, REVENANT's note is already there.</p>
 
     <div class="step-mock">
-      <div class="with-ghost-label">Your terminal — ghost active</div>
+      <div class="with-ghost-label">Your terminal - ghost active</div>
       <div class="terminal">
         <div class="terminal-titlebar">
           <div class="traffic-dot dot-red"></div>
           <div class="traffic-dot dot-yellow"></div>
           <div class="traffic-dot dot-green"></div>
-          <div class="terminal-titlebar-text">zsh — payments-service</div>
+          <div class="terminal-titlebar-text">zsh - payments-service</div>
         </div>
         <div class="terminal-body">
           <div class="term-ghost">
             <span class="term-ghost-label">REVENANT</span><br>
-            Race condition in ws/websocket.ts:47 — reconnect timer not cleared on success.<br>
+            Race condition in ws/websocket.ts:47 - reconnect timer not cleared on success.<br>
             Last: <span style="color:rgba(78,234,219,0.9)">npm test -- --grep "reconnect"</span> → 2 failing<br>
             Next: add clearTimeout before retryCount reset, re-run tests.<br>
             <span class="term-ghost-meta">1hr 7min ago &middot; dissolves in 5 min</span>
@@ -766,7 +766,7 @@
 
   <!-- ═══ SCENE 5: SLACK ═══ -->
   <div class="scenario-step">
-    <div class="scene-time">10:23 AM — You check Slack</div>
+    <div class="scene-time">10:23 AM - You check Slack</div>
     <div class="step-header">
       <div class="step-num">5</div>
       <div class="step-title">The ghost left a Slack message (only you can see it)</div>
@@ -774,7 +774,7 @@
     <p class="step-desc">In the #payments-eng channel, an ephemeral message from REVENANT. Visible only to you. Nobody else on the team sees it.</p>
 
     <div class="step-mock">
-      <div class="with-ghost-label">Slack — ephemeral ghost</div>
+      <div class="with-ghost-label">Slack - ephemeral ghost</div>
       <div class="slack">
         <div class="slack-titlebar">
           <span class="slack-hash">#</span>
@@ -790,7 +790,7 @@
                 <span class="slack-msg-time">10:22 AM</span>
               </div>
               <div class="slack-msg-text">
-                Picking up where you left off: race condition in <code>WebSocketClient.connect()</code> — the reconnect timer isn't cleared on successful connection. Two tests failing in <code>reconnect.test.ts</code>. You were about to add <code>clearTimeout</code> at line 47.
+                Picking up where you left off: race condition in <code>WebSocketClient.connect()</code> - the reconnect timer isn't cleared on successful connection. Two tests failing in <code>reconnect.test.ts</code>. You were about to add <code>clearTimeout</code> at line 47.
               </div>
               <div class="slack-ephemeral">Only visible to you &middot; disappears in 5 minutes</div>
             </div>
@@ -800,9 +800,9 @@
     </div>
   </div>
 
-  <!-- ═══ SCENE 6: LATER — BROWSER ═══ -->
+  <!-- ═══ SCENE 6: LATER - BROWSER ═══ -->
   <div class="scenario-step">
-    <div class="scene-time">2:45 PM — After lunch, different task entirely</div>
+    <div class="scene-time">2:45 PM - After lunch, different task entirely</div>
     <div class="step-header">
       <div class="step-num">6</div>
       <div class="step-title">You switched to a different project. Now you're back to research.</div>
@@ -810,7 +810,7 @@
     <p class="step-desc">You spent lunchtime reading a blog post about token bucket rate limiting for the API gateway project. You left to grab coffee. When you open Chrome, the ghost is on the page you were reading.</p>
 
     <div class="step-mock">
-      <div class="with-ghost-label">Browser — ghost banner</div>
+      <div class="with-ghost-label">Browser - ghost banner</div>
       <div class="browser">
         <div class="browser-bar">
           <div class="traffic-dot dot-red"></div>
@@ -828,7 +828,7 @@
           </div>
           <div class="browser-content">
             <h1>Rate Limiting at Scale: Token Bucket vs. Sliding Window</h1>
-            <p>When building an API gateway that handles millions of requests per second, choosing the right rate limiting algorithm isn't just an implementation detail — it's an architectural decision that affects every downstream service...</p>
+            <p>When building an API gateway that handles millions of requests per second, choosing the right rate limiting algorithm isn't just an implementation detail - it's an architectural decision that affects every downstream service...</p>
             <p>The token bucket algorithm works by maintaining a "bucket" of tokens that refills at a constant rate. Each request consumes one token. When the bucket is empty, requests are rejected until tokens refill...</p>
           </div>
         </div>

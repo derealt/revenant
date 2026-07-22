@@ -2,7 +2,7 @@
 
 **Cognitive context restoration.** An invisible daemon that captures what you were doing when you leave a task and restores it as ghost annotations in your existing tools when you return.
 
-No UI. No app to open. No notes to write. The ghost appears in your terminal, your editor, your browser — exactly where you return first. It self-destructs after 5 minutes of activity.
+No UI. No app to open. No notes to write. The ghost appears in your terminal, your editor, your browser - exactly where you return first. It self-destructs after 5 minutes of activity.
 
 ## The Problem
 
@@ -12,9 +12,9 @@ That 23 minutes of fumbling costs you every time you switch contexts. REVENANT e
 
 ## How It Works
 
-1. **You work.** REVENANT watches silently — git state, open files, terminal commands.
+1. **You work.** REVENANT watches silently - git state, open files, terminal commands.
 2. **You leave.** REVENANT captures your cognitive context and compresses it into a card.
-3. **You return.** The ghost appears — in your terminal, your editor, your browser.
+3. **You return.** The ghost appears - in your terminal, your editor, your browser.
 4. **You read it.** 10 seconds. You're back in flow.
 5. **It vanishes.** 5 minutes later, the ghost is gone.
 
@@ -79,7 +79,7 @@ A subtle banner at the top of any webpage with your context summary and next ste
 
 ## LLM Compression (Optional)
 
-By default, REVENANT uses a smart rule engine — 7 components that produce natural context cards from git signals, commit messages, and file paths. Zero network, zero cost, zero latency.
+By default, REVENANT uses a smart rule engine - 7 components that produce natural context cards from git signals, commit messages, and file paths. Zero network, zero cost, zero latency.
 
 Optionally, enable LLM compression for richer cards:
 
@@ -94,16 +94,16 @@ Supports: Claude (Anthropic), OpenAI, Ollama (local, free).
 
 - **All data stays on your machine.** No server, no cloud, no telemetry.
 - **LLM calls are opt-in** and go directly from your machine to the provider.
-- **Ghost annotations never modify your files.** VS Code decorations, terminal MOTD, browser DOM injection — all ephemeral.
+- **Ghost annotations never modify your files.** VS Code decorations, terminal MOTD, browser DOM injection - all ephemeral.
 - **Clipboard and browser signals are opt-in** in the config.
 
 ## Architecture
 
 ```
-~/.local/bin/revenant    — daemon (runs as LaunchAgent)
-~/.local/bin/rvn         — CLI
-~/.revenant/             — runtime data (db, pid, logs, ghost state)
-~/.config/revenant/      — config + shell integration
+~/.local/bin/revenant    - daemon (runs as LaunchAgent)
+~/.local/bin/rvn         - CLI
+~/.revenant/             - runtime data (db, pid, logs, ghost state)
+~/.config/revenant/      - config + shell integration
 ```
 
 ## Requirements

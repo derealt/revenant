@@ -1,5 +1,5 @@
 #!/usr/bin/env fish
-# REVENANT — Fish Shell Integration
+# REVENANT - Fish Shell Integration
 #
 # Source this in your config.fish:
 #   [ -f ~/.config/revenant/revenant.fish ] && source ~/.config/revenant/revenant.fish

@@ -1,10 +1,9 @@
-//! Ghost dispatcher — routes context cards to per-tool injectors
+//! Ghost dispatcher - routes context cards to per-tool injectors
 //!
 //! Each ghost channel (VS Code, terminal, Slack, browser, Obsidian)
 //! receives the context card and injects it in a tool-native way.
-//! Ghosts are transient — they self-destruct after the configured TTL.
+//! Ghosts are transient - they self-destruct after the configured TTL.
 
-pub mod browser;
 pub mod http;
 pub mod obsidian;
 pub mod slack;
@@ -39,7 +38,6 @@ pub struct GhostDispatcher {
     vscode: Option<vscode::VscodeGhost>,
     slack: Option<slack::SlackGhost>,
     obsidian: Option<obsidian::ObsidianGhost>,
-    browser: Option<browser::BrowserGhost>,
     // Track active ghosts for reaping
     active_ghosts: Arc<RwLock<Vec<ActiveGhost>>>,
 }
@@ -75,18 +73,11 @@ impl GhostDispatcher {
             None
         };
 
-        let browser = if config.ghosts.browser_enabled {
-            Some(browser::BrowserGhost::new()?)
-        } else {
-            None
-        };
-
         Ok(Self {
             terminal,
             vscode,
             slack,
             obsidian,
-            browser,
             active_ghosts: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -135,16 +126,6 @@ impl GhostDispatcher {
             }
         }
 
-        if let Some(ref ghost) = self.browser {
-            match ghost.inject(card).await {
-                Ok(()) => {
-                    info!("browser ghost injected");
-                    dispatched.push("browser".to_string());
-                }
-                Err(e) => warn!("browser ghost injection failed: {e}"),
-            }
-        }
-
         // Record active ghosts for TTL reaping
         let mut active = self.active_ghosts.write().await;
         for channel in dispatched {
@@ -169,9 +150,6 @@ impl GhostDispatcher {
             ghost.clear().await?;
         }
         if let Some(ref ghost) = self.obsidian {
-            ghost.clear().await?;
-        }
-        if let Some(ref ghost) = self.browser {
             ghost.clear().await?;
         }
 
@@ -216,11 +194,6 @@ impl GhostDispatcher {
                 }
                 "obsidian" => {
                     if let Some(ref ghost) = self.obsidian {
-                        ghost.clear().await?;
-                    }
-                }
-                "browser" => {
-                    if let Some(ref ghost) = self.browser {
                         ghost.clear().await?;
                     }
                 }

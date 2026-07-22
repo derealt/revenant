@@ -1,4 +1,4 @@
-//! SQLite persistence — save, load, query, and prune context cards
+//! SQLite persistence - save, load, query, and prune context cards
 //!
 //! Each context card is tied to a project directory and timestamped.
 //! The store auto-prunes cards older than the configured retention period.
@@ -19,7 +19,7 @@ pub struct ContextCard {
     pub project_dir: String,
     /// Human-readable project name (directory basename)
     pub project_name: String,
-    /// The context summary — what you were doing + what's next
+    /// The context summary - what you were doing + what's next
     pub summary: String,
     /// Extracted next step (may be empty)
     pub next_step: String,
@@ -109,7 +109,7 @@ impl ContextStore {
             .ok();
 
         if let Some(ref prev_summary) = maybe_prev {
-            // Strip temporal prefixes before comparing — "Just now you were"
+            // Strip temporal prefixes before comparing - "Just now you were"
             // vs "Moments ago you were" should still count as duplicates
             let a = strip_temporal_prefix(prev_summary);
             let b = strip_temporal_prefix(&card.summary);

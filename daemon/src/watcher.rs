@@ -1,14 +1,15 @@
-//! File system watcher — debounced, gitignore-aware event stream
+//! File system watcher - filtered event stream feeding the detector
 //!
 //! Uses the `notify` crate with FSEvents (macOS) / inotify (Linux).
-//! Events are debounced and filtered, then fed to the detector
-//! as evidence of user activity.
+//! Events in ignored directories are dropped; the rest count as user
+//! activity. Only TRANSITIONS emit switch events (project change,
+//! absence, return), so the stream is inherently debounced at the
+//! decision level.
 
 use anyhow::{Context, Result};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -72,10 +73,12 @@ pub async fn run_watcher(
         watcher.watch(root, RecursiveMode::Recursive)?;
     }
 
-    // Debounce state
+    // Transition state
     let mut last_event_time = Instant::now();
     let mut active_project: Option<String> = None;
-    let debounce_interval = Duration::from_secs(2);
+    // Set once the periodic check has reported a departure for the current
+    // absence, so we do not re-send one every poll tick while away
+    let mut absence_departure_sent = false;
     let absence_threshold =
         Duration::from_secs(config.daemon.absence_threshold_minutes * 60);
 
@@ -128,7 +131,7 @@ pub async fn run_watcher(
                                     .await;
                             }
 
-                            // Return to new project — carry where we came from
+                            // Return to new project - carry where we came from
                             let _ = switch_tx
                                 .send(SwitchEvent {
                                     kind: SwitchKind::Return {
@@ -139,21 +142,24 @@ pub async fn run_watcher(
                                 })
                                 .await;
                         } else if was_absent {
-                            // Same project but long absence — treat as return
+                            // Same project but long absence - treat as return
                             debug!(
                                 "return after absence to {}",
                                 project_str
                             );
 
-                            // First save departure state (retroactively)
-                            let _ = switch_tx
-                                .send(SwitchEvent {
-                                    kind: SwitchKind::Departure {
-                                        project_dir: project_str.clone(),
-                                    },
-                                    timestamp: chrono::Utc::now(),
-                                })
-                                .await;
+                            // Save departure state retroactively, unless the
+                            // periodic check already captured it at absence time
+                            if !absence_departure_sent {
+                                let _ = switch_tx
+                                    .send(SwitchEvent {
+                                        kind: SwitchKind::Departure {
+                                            project_dir: project_str.clone(),
+                                        },
+                                        timestamp: chrono::Utc::now(),
+                                    })
+                                    .await;
+                            }
 
                             // Then trigger return
                             let _ = switch_tx
@@ -171,12 +177,13 @@ pub async fn run_watcher(
                     }
 
                     last_event_time = now;
+                    absence_departure_sent = false;
                 }
             }
-            // Periodic absence check
+            // Periodic absence check - reports each absence exactly once
             _ = tokio::time::sleep(Duration::from_secs(30)) => {
                 let elapsed = Instant::now().duration_since(last_event_time);
-                if elapsed > absence_threshold {
+                if elapsed > absence_threshold && !absence_departure_sent {
                     if let Some(ref project) = active_project {
                         debug!("absence detected for {}", project);
                         let _ = switch_tx.send(SwitchEvent {
@@ -185,6 +192,7 @@ pub async fn run_watcher(
                             },
                             timestamp: chrono::Utc::now(),
                         }).await;
+                        absence_departure_sent = true;
                     }
                 }
             }

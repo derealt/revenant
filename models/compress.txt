@@ -10,12 +10,12 @@ Rules:
 - Be SPECIFIC. Never say "You were working on the project." Say what exactly.
 - Reference specific files, functions, error messages, and branch names
 - Keep it under 3 sentences total. Every word must earn its place.
-- Don't explain what the signals mean — synthesize them into intent
+- Don't explain what the signals mean - synthesize them into intent
 - If you can infer a hypothesis the developer had, include it
 - If there's a clear next action, state it concretely
 
 Example good output:
-"You were debugging the WebSocket reconnection logic in `transport.rs` — the timer wasn't being cleared on successful reconnect, causing duplicate connections after network hiccups. Next: add `clearTimeout` in the success handler at line 47 and run `cargo test test_concurrent_connect`."
+"You were debugging the WebSocket reconnection logic in `transport.rs` - the timer wasn't being cleared on successful reconnect, causing duplicate connections after network hiccups. Next: add `clearTimeout` in the success handler at line 47 and run `cargo test test_concurrent_connect`."
 
 Example bad output:
 "You were working on some Rust files and ran some tests."

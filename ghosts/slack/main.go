@@ -1,8 +1,8 @@
-// REVENANT Ghost — Slack Bot
+// REVENANT Ghost - Slack Bot
 //
 // Posts ephemeral messages containing context cards to Slack channels.
 // Ephemeral messages are visible only to the target user and cannot
-// be seen by anyone else. They also don't persist — Slack automatically
+// be seen by anyone else. They also don't persist - Slack automatically
 // clears them, making them ideal for ghost annotations.
 //
 // The bot listens on a Unix socket for messages from the daemon,
@@ -145,7 +145,7 @@ func handleConnection(conn net.Conn, api *slack.Client, config *Config) {
 				}
 			}
 		case "clear":
-			// Ephemeral messages auto-clear in Slack — nothing to do
+			// Ephemeral messages auto-clear in Slack - nothing to do
 			log.Println("clear received (ephemeral messages auto-expire)")
 		}
 	}
@@ -155,7 +155,7 @@ func handleConnection(conn net.Conn, api *slack.Client, config *Config) {
 
 func postGhost(api *slack.Client, config *Config, card *ContextCard) error {
 	// Build the message with Slack Block Kit
-	headerText := fmt.Sprintf(":ghost: *REVENANT* — %s", card.ProjectName)
+	headerText := fmt.Sprintf(":ghost: *REVENANT* - %s", card.ProjectName)
 	summaryText := card.Summary
 
 	blocks := []slack.Block{
@@ -189,7 +189,7 @@ func postGhost(api *slack.Client, config *Config, card *ContextCard) error {
 		),
 	)
 
-	// Post as ephemeral message — visible only to the user
+	// Post as ephemeral message - visible only to the user
 	_, err := api.PostEphemeral(
 		config.ChannelID,
 		config.UserID,

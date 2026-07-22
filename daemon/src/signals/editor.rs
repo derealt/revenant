@@ -1,11 +1,11 @@
-//! Editor state signal — open files, cursor positions, recent edits
+//! Editor state signal - open files, cursor positions, recent edits
 //!
 //! Strategy: parse VS Code's workspace state files and recently-modified
 //! files to infer what the user was working on. No LSP dependency.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use crate::config::EditorSignalConfig;

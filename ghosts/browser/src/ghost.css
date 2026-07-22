@@ -1,4 +1,4 @@
-/* REVENANT Ghost — Browser Banner */
+/* REVENANT Ghost - Browser Banner */
 
 #revenant-ghost-banner {
   position: fixed;
@@ -24,7 +24,7 @@
   color: rgba(255, 255, 255, 0.85);
   line-height: 1.5;
 
-  /* Visible immediately — no animation fuss */
+  /* Visible immediately - no animation fuss */
   opacity: 1;
   transition: opacity 0.3s ease;
 }
@@ -72,7 +72,7 @@
   margin-bottom: 2px;
 }
 
-/* Summary text — the main context */
+/* Summary text - the main context */
 .revenant-summary {
   color: rgba(255, 255, 255, 0.9);
   font-size: 13px;
@@ -84,7 +84,7 @@
   overflow: hidden;
 }
 
-/* Next step — highlighted */
+/* Next step - highlighted */
 .revenant-next {
   color: #f0b952;
   font-size: 12px;

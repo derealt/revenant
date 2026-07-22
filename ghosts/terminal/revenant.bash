@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# REVENANT — Bash Shell Integration
+# REVENANT - Bash Shell Integration
 #
 # Source this in your .bashrc:
 #   [ -f ~/.config/revenant/revenant.bash ] && source ~/.config/revenant/revenant.bash

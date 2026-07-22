@@ -6,8 +6,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::expand_path;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RevenantConfig {
     pub daemon: DaemonConfig,
@@ -26,8 +24,6 @@ pub struct DaemonConfig {
     pub absence_threshold_minutes: u64,
     #[serde(default = "default_ghost_ttl")]
     pub ghost_ttl_minutes: u64,
-    #[serde(default = "default_max_cards")]
-    pub max_cards_per_project: u64,
     #[serde(default = "default_prune_days")]
     pub prune_after_days: u64,
     #[serde(default = "default_pid_file")]
@@ -37,7 +33,6 @@ pub struct DaemonConfig {
 fn default_poll_interval() -> u64 { 5 }
 fn default_absence_threshold() -> u64 { 15 }
 fn default_ghost_ttl() -> u64 { 2 }
-fn default_max_cards() -> u64 { 100 }
 fn default_prune_days() -> u64 { 30 }
 fn default_pid_file() -> String { "~/.revenant/revenant.pid".into() }
 
@@ -76,8 +71,6 @@ fn default_recent_count() -> usize { 20 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EditorSignalConfig {
-    #[serde(default)]
-    pub lsp_socket: String,
     #[serde(default = "default_vscode_state")]
     pub vscode_state_dir: String,
 }
@@ -124,8 +117,6 @@ pub struct GhostsConfig {
     pub terminal_enabled: bool,
     #[serde(default)]
     pub slack_enabled: bool,
-    #[serde(default)]
-    pub browser_enabled: bool,
     #[serde(default)]
     pub obsidian_enabled: bool,
     #[serde(default, rename = "terminal")]
@@ -201,7 +192,6 @@ impl Default for RevenantConfig {
                 poll_interval: 5,
                 absence_threshold_minutes: 15,
                 ghost_ttl_minutes: 5,
-                max_cards_per_project: 100,
                 prune_after_days: 30,
                 pid_file: default_pid_file(),
             },
@@ -223,7 +213,6 @@ impl Default for RevenantConfig {
                 vscode_enabled: true,
                 terminal_enabled: true,
                 slack_enabled: false,
-                browser_enabled: false,
                 obsidian_enabled: false,
                 terminal_config: TerminalGhostConfig::default(),
                 slack_config: SlackGhostConfig::default(),

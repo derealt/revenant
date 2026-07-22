@@ -1,4 +1,4 @@
-//! REVENANT — Invisible cognitive context daemon
+//! REVENANT - Invisible cognitive context daemon
 //!
 //! Captures working state when you leave a task.
 //! Restores it as ghost annotations when you return.
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
         .compact()
         .init();
 
-    info!("revenant waking — pid {}", std::process::id());
+    info!("revenant waking - pid {}", std::process::id());
 
     // Load configuration
     let config = config::load_config().context("failed to load configuration")?;
@@ -81,8 +81,8 @@ async fn main() -> Result<()> {
     // Channel for switch events
     let (switch_tx, mut switch_rx) = mpsc::channel::<SwitchEvent>(32);
 
-    // Spawn ghost HTTP server for browser extension polling
-    let ghost_http = Arc::new(ghost::http::GhostHttpServer::new());
+    // Spawn ghost HTTP server for browser extension polling and tab reports
+    let ghost_http = Arc::new(ghost::http::GhostHttpServer::new(config.signals.browser));
     let ghost_http_server = Arc::clone(&ghost_http);
     tokio::spawn(async move {
         ghost_http_server.serve(7711).await;
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
                     }
                 });
                 ghost_http.inject(serde_json::to_string(&card_json).unwrap_or_default());
-                info!("pre-loaded startup ghost for {} — {}", card.project_name, card.summary);
+                info!("pre-loaded startup ghost for {} - {}", card.project_name, card.summary);
 
                 // Also write the terminal MOTD so new shells see it
                 if let Err(e) = d.dispatcher.dispatch(&card).await {
@@ -186,7 +186,7 @@ async fn main() -> Result<()> {
 
             match event.kind {
                 SwitchKind::Departure { project_dir } => {
-                    // User left — snapshot, compress, store
+                    // User left - snapshot, compress, store
                     match d.aggregator.capture(&project_dir).await {
                         Ok(working_state) => {
                             let card = d
@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
                                 error!("failed to save context card: {e}");
                             } else {
                                 info!(
-                                    "context card saved for {} — {}",
+                                    "context card saved for {} - {}",
                                     card.project_dir, card.summary
                                 );
                             }
@@ -211,7 +211,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 SwitchKind::Return { project_dir, from_project } => {
-                    // User returned — load card, dispatch ghosts
+                    // User returned - load card, dispatch ghosts
                     match d.store.latest_card(&project_dir) {
                         Ok(Some(mut card)) => {
                             // Enrich card with cross-project context
@@ -224,7 +224,7 @@ async fn main() -> Result<()> {
                                 );
                             }
 
-                            info!("restoring ghost for {} — {}", card.project_dir, card.summary);
+                            info!("restoring ghost for {} - {}", card.project_dir, card.summary);
                             // Update HTTP server for browser extension
                             let card_json = serde_json::json!({
                                 "type": "inject",
@@ -250,7 +250,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 SwitchKind::Timeout => {
-                    // Activity timeout — clear any lingering ghosts
+                    // Activity timeout - clear any lingering ghosts
                     ghost_http.clear();
                     if let Err(e) = d.dispatcher.clear_all().await {
                         warn!("failed to clear ghosts on timeout: {e}");

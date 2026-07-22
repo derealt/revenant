@@ -1,9 +1,9 @@
 /**
- * REVENANT Ghost — Obsidian Plugin
+ * REVENANT Ghost - Obsidian Plugin
  *
  * Monitors a state file written by the daemon and displays a transient
  * callout block at the top of the note you were last editing. The callout
- * is rendered as a virtual element in the editor — it NEVER modifies
+ * is rendered as a virtual element in the editor - it NEVER modifies
  * the actual note content.
  *
  * The ghost disappears after the configured TTL of activity.
@@ -135,7 +135,7 @@ export default class RevenantGhostPlugin extends Plugin {
       const state: { type: string; card?: ContextCard } = JSON.parse(content);
 
       if (state.type === 'inject' && state.card) {
-        // New ghost — only inject if different from current
+        // New ghost - only inject if different from current
         if (!this.ghostState.card || this.ghostState.card.id !== state.card.id) {
           this.injectGhost(state.card);
         }
@@ -143,7 +143,7 @@ export default class RevenantGhostPlugin extends Plugin {
         this.clearGhost();
       }
     } catch {
-      // File might be mid-write — ignore parse errors
+      // File might be mid-write - ignore parse errors
     }
 
     // Check TTL expiry

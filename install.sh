@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# REVENANT — Install Script
+# REVENANT - Install Script
 # Cognitive context restoration daemon
 # https://github.com/derealt/revenant
 
@@ -107,8 +107,8 @@ echo "  │  Run 'rvn test' to inject a test card."
 echo "  │  Run 'rvn status' to check the daemon."
 echo "  │"
 echo "  │  Optional:"
-echo "  │    rvn setup llm     — Enable AI-powered context cards"
-echo "  │    rvn setup browser  — Install Chrome extension"
-echo "  │    rvn setup vscode   — Install VS Code extension"
+echo "  │    rvn setup llm     - Enable AI-powered context cards"
+echo "  │    rvn setup browser  - Install Chrome extension"
+echo "  │    rvn setup vscode   - Install VS Code extension"
 echo "  └───"
 echo ""

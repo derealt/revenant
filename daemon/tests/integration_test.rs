@@ -399,6 +399,69 @@ fn privacy_defaults_are_opt_in() {
 }
 
 #[tokio::test]
+async fn http_server_serves_inject_and_clear() {
+    use revenant::ghost::http::GhostHttpServer;
+    use std::sync::Arc;
+
+    let port = 17711u16;
+    let server = Arc::new(GhostHttpServer::new(false));
+    let serve = Arc::clone(&server);
+    tokio::spawn(async move { serve.serve(port).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let post = |path: &'static str, body: &'static str| async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let req = format!(
+            "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut resp = String::new();
+        s.read_to_string(&mut resp).await.unwrap();
+        resp
+    };
+    let get = || async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(b"GET /ghost HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut resp = String::new();
+        s.read_to_string(&mut resp).await.unwrap();
+        resp
+    };
+
+    // Starts clear
+    assert!(get().await.contains(r#"{"type":"clear"}"#));
+
+    // Valid inject is served to subsequent polls
+    let card = r#"{"type":"inject","card":{"id":"t1","summary":"You were testing the http bridge.","next_step":"","project_dir":"/tmp/x","project_name":"x","ttl_seconds":120}}"#;
+    let resp = post("/inject", card).await;
+    assert!(resp.starts_with("HTTP/1.1 204"), "got: {resp}");
+    let served = get().await;
+    assert!(served.contains("You were testing the http bridge."));
+
+    // Malformed inject is rejected and does not clobber the card
+    let resp = post("/inject", "not json").await;
+    assert!(resp.starts_with("HTTP/1.1 400"), "got: {resp}");
+    assert!(get().await.contains("You were testing the http bridge."));
+
+    // Clear resets
+    let resp = post("/clear", "").await;
+    assert!(resp.starts_with("HTTP/1.1 204"), "got: {resp}");
+    assert!(get().await.contains(r#"{"type":"clear"}"#));
+
+    // Tab reports are accepted quietly when reporting is disabled
+    let resp = post("/tab", r#"[{"url":"https://example.com","title":"t","timestamp":1}]"#).await;
+    assert!(resp.starts_with("HTTP/1.1 204"), "got: {resp}");
+
+    // Unknown paths 404
+    let resp = post("/nope", "").await;
+    assert!(resp.starts_with("HTTP/1.1 404"), "got: {resp}");
+}
+
+#[tokio::test]
 async fn ghost_never_modifies_project_files() {
     let project = setup_test_project("no-modify");
     let main_rs = project.join("main.rs");

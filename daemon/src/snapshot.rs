@@ -1,4 +1,4 @@
-//! Snapshot aggregator — collects all signals into a unified WorkingState
+//! Snapshot aggregator - collects all signals into a unified WorkingState
 //!
 //! The WorkingState represents everything we know about what the user
 //! was doing at a point in time. It's the raw material the compressor

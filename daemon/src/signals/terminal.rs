@@ -1,4 +1,4 @@
-//! Terminal signal — recent commands from shell history, working directory
+//! Terminal signal - recent commands from shell history, working directory
 //!
 //! Parses zsh_history and bash_history to extract recent commands.
 //! Zsh history format: `: timestamp:duration;command`

@@ -1,7 +1,7 @@
 {
   "name": "revenant-ghost",
   "displayName": "REVENANT Ghost",
-  "description": "Cognitive context restoration — ghost annotations that show where you left off",
+  "description": "Cognitive context restoration - ghost annotations that show where you left off",
   "version": "0.1.0",
   "publisher": "revenant",
   "engines": {

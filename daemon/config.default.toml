@@ -1,4 +1,4 @@
-# REVENANT — Default Configuration
+# REVENANT - Default Configuration
 # Copy to ~/.config/revenant/config.toml and customize
 
 [daemon]
@@ -8,8 +8,6 @@ poll_interval = 5
 absence_threshold_minutes = 15
 # Minutes of activity before ghosts self-destruct
 ghost_ttl_minutes = 5
-# Maximum context cards to retain per project
-max_cards_per_project = 100
 # Days after which old context cards are pruned
 prune_after_days = 30
 # PID file location
@@ -21,7 +19,7 @@ git = true
 editor_enabled = true
 terminal_enabled = true
 clipboard = false       # opt-in: privacy-sensitive
-browser = false         # requires native messaging host
+browser = false         # opt-in: active tab reported by the browser extension
 
 # File patterns to ignore (in addition to .gitignore)
 ignore_patterns = [
@@ -44,8 +42,6 @@ history_files = [
 recent_command_count = 20
 
 [signals.editor]
-# LSP socket path (if available)
-lsp_socket = ""
 # VS Code workspace state path
 vscode_state_dir = "~/.revenant/vscode-state"
 
@@ -60,11 +56,11 @@ provider = "ollama"
 model = "llama3.2:3b"
 # Endpoint URL (for ollama or compatible API)
 endpoint = "http://localhost:11434/api/generate"
-# API key (for claude/openai — leave empty for ollama)
+# API key (for claude/openai - leave empty for ollama)
 api_key = ""
 # Max tokens for context card generation
 max_tokens = 256
-# Temperature — low for deterministic, factual summaries
+# Temperature - low for deterministic, factual summaries
 temperature = 0.3
 
 [ghosts]
@@ -72,15 +68,16 @@ temperature = 0.3
 vscode_enabled = true
 terminal_enabled = true
 slack_enabled = false
-browser_enabled = false
 obsidian_enabled = false
+# The browser banner needs no flag here: the daemon always serves the
+# current ghost on localhost:7711 for the extension to poll.
 
 [ghosts.terminal]
 # File where the terminal ghost writes the motd
 motd_file = "~/.revenant/motd"
 
 [ghosts.slack]
-# Bot token (xoxb-...) — only if slack ghost enabled
+# Bot token (xoxb-...) - only if slack ghost enabled
 bot_token = ""
 # Your Slack user ID (for ephemeral messages)
 user_id = ""
@@ -90,10 +87,6 @@ channel_id = ""
 [ghosts.vscode]
 # Unix socket for communicating with the VS Code extension
 socket_path = "~/.revenant/vscode.sock"
-
-[ghosts.browser]
-# Native messaging host name
-host_name = "com.revenant.ghost"
 
 [ghosts.obsidian]
 # Vault path

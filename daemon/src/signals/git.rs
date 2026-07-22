@@ -1,4 +1,4 @@
-//! Git state signal — branch, status, recent commits, diff stats
+//! Git state signal - branch, status, recent commits, diff stats
 //!
 //! Shells out to `git` binary rather than linking libgit2,
 //! keeping the binary small and avoiding C dependency chains.
@@ -85,7 +85,7 @@ fn git_cmd(project_dir: &str, args: &[&str]) -> Result<String> {
 fn git_branch(project_dir: &str) -> Result<String> {
     let branch = git_cmd(project_dir, &["branch", "--show-current"])?;
     if branch.is_empty() {
-        // Detached HEAD — get the short ref
+        // Detached HEAD - get the short ref
         git_cmd(project_dir, &["rev-parse", "--short", "HEAD"])
     } else {
         Ok(branch)

@@ -1,7 +1,7 @@
 {
   "name": "revenant-ghost-browser",
   "displayName": "REVENANT Ghost",
-  "description": "Browser extension for cognitive context restoration — shows what you were doing when you last visited",
+  "description": "Browser extension for cognitive context restoration - shows what you were doing when you last visited",
   "version": "0.1.0",
   "private": true,
   "scripts": {

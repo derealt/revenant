@@ -1,4 +1,4 @@
-//! Clipboard signal — captures last text content (opt-in only)
+//! Clipboard signal - captures last text content (opt-in only)
 //!
 //! Uses platform-native clipboard access via pbpaste (macOS)
 //! or xclip/xsel (Linux). Never captures images.

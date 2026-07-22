@@ -1,4 +1,4 @@
-//! Slack ghost — communicates with the Go Slack bot via Unix socket
+//! Slack ghost - communicates with the Go Slack bot via Unix socket
 //!
 //! The daemon sends JSON messages over a Unix socket to a Go sidecar
 //! that handles the actual Slack API calls (posting ephemeral messages,
@@ -24,7 +24,7 @@ pub struct SlackGhost {
 
 impl SlackGhost {
     pub fn new(_config: &SlackGhostConfig) -> Result<Self> {
-        // The socket path is fixed by convention — the Go bot
+        // The socket path is fixed by convention - the Go bot
         // and Rust daemon agree on ~/.revenant/slack.sock
         let socket_path = crate::expand_path("~/.revenant/slack.sock");
         Ok(Self { socket_path })
@@ -59,7 +59,7 @@ impl SlackGhost {
     /// Send a newline-delimited JSON message over the Unix socket
     async fn send_message(&self, message: &serde_json::Value) -> Result<()> {
         if !self.socket_path.exists() {
-            // Slack bot not running — not an error, just skip
+            // Slack bot not running - not an error, just skip
             tracing::debug!(
                 "slack socket not found at {}, bot not running",
                 self.socket_path.display()
@@ -81,7 +81,7 @@ impl SlackGhost {
             }
             Err(e) => {
                 tracing::debug!("could not connect to slack socket: {e}");
-                Ok(()) // Non-fatal — bot may not be running
+                Ok(()) // Non-fatal - bot may not be running
             }
         }
     }

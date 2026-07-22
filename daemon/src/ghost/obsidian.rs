@@ -1,4 +1,4 @@
-//! Obsidian ghost — writes state file for the Obsidian plugin to poll
+//! Obsidian ghost - writes state file for the Obsidian plugin to poll
 //!
 //! Unlike VS Code and Slack which use Unix sockets, the Obsidian ghost
 //! communicates via a JSON state file at ~/.revenant/obsidian-state.json.

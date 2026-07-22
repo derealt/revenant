@@ -1,4 +1,4 @@
-//! VS Code ghost — communicates with the extension via Unix socket
+//! VS Code ghost - communicates with the extension via Unix socket
 //!
 //! The daemon writes JSON messages to a Unix socket that the VS Code
 //! extension listens on. The extension renders inline decorations
@@ -48,7 +48,7 @@ impl VscodeGhost {
 
     async fn send_message(&self, message: &serde_json::Value) -> Result<()> {
         if !self.socket_path.exists() {
-            // Extension not running — not an error, just skip
+            // Extension not running - not an error, just skip
             tracing::debug!(
                 "vscode socket not found at {}, extension not running",
                 self.socket_path.display()
@@ -69,7 +69,7 @@ impl VscodeGhost {
             }
             Err(e) => {
                 tracing::debug!("could not connect to vscode socket: {e}");
-                Ok(()) // Non-fatal — extension may not be running
+                Ok(()) // Non-fatal - extension may not be running
             }
         }
     }

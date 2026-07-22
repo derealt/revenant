@@ -1,12 +1,14 @@
-//! Browser signal — active tab URL and title via native messaging
+//! Browser signal - active tab URL and title, reported by the extension
 //!
-//! The browser extension communicates via Chrome's native messaging protocol.
-//! When the daemon isn't running or native messaging isn't configured,
-//! this signal gracefully returns empty.
+//! The browser extension POSTs the active tab to the daemon's local HTTP
+//! server (see ghost::http), which stores it in a well-known state file.
+//! The snapshot aggregator reads that file at capture time. The daemon
+//! only stores tab reports when `signals.browser = true` in config, so
+//! browsing data never touches disk unless the user opts in.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserTab {
@@ -15,12 +17,13 @@ pub struct BrowserTab {
     pub timestamp: u64,
 }
 
-/// Capture current browser tabs from the native messaging state file
-///
-/// The browser extension writes current tab info to a well-known file
-/// that the daemon reads. This avoids keeping a persistent connection.
+fn state_file() -> PathBuf {
+    crate::expand_path("~/.revenant/browser-state.json")
+}
+
+/// Capture current browser tabs from the extension-reported state file
 pub fn capture() -> Result<Vec<BrowserTab>> {
-    let state_file = crate::expand_path("~/.revenant/browser-state.json");
+    let state_file = state_file();
 
     if !state_file.exists() {
         return Ok(vec![]);
@@ -43,35 +46,16 @@ pub fn capture() -> Result<Vec<BrowserTab>> {
     Ok(tabs)
 }
 
-/// Install the native messaging host manifest for Chrome/Chromium
-pub fn install_native_host(daemon_path: &Path) -> Result<()> {
-    let manifest = serde_json::json!({
-        "name": "com.revenant.ghost",
-        "description": "REVENANT ghost annotation bridge",
-        "path": daemon_path.to_string_lossy(),
-        "type": "stdio",
-        "allowed_origins": [
-            "chrome-extension://revenant-ghost-extension-id/"
-        ]
-    });
+/// Store tabs reported by the browser extension (atomic write)
+pub fn store_tabs(tabs: &[BrowserTab]) -> Result<()> {
+    let state_file = state_file();
+    if let Some(parent) = state_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
-    let host_dir = if cfg!(target_os = "macos") {
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join("Library/Application Support/Google/Chrome/NativeMessagingHosts")
-    } else {
-        dirs::config_dir()
-            .unwrap_or_default()
-            .join("google-chrome/NativeMessagingHosts")
-    };
-
-    std::fs::create_dir_all(&host_dir)?;
-    let manifest_path = host_dir.join("com.revenant.ghost.json");
-    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-
-    tracing::info!(
-        "native messaging host installed at {}",
-        manifest_path.display()
-    );
+    let content = serde_json::to_string(tabs)?;
+    let tmp_path = state_file.with_extension("json.tmp");
+    std::fs::write(&tmp_path, content)?;
+    std::fs::rename(&tmp_path, &state_file)?;
     Ok(())
 }

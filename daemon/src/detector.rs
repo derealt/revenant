@@ -1,14 +1,13 @@
-//! Context switch detection — the brain of REVENANT
+//! Context switch detection - the brain of REVENANT
 //!
 //! Detects three types of context switches:
-//! 1. Project change — user starts working in a different directory
-//! 2. Long absence — no activity for >15min (configurable)
-//! 3. Branch change — git branch switches within the same project
+//! 1. Project change - user starts working in a different directory
+//! 2. Long absence - no activity for >15min (configurable)
+//! 3. Branch change - git branch switches within the same project
 //!
 //! Each detection triggers a Departure (save state) and/or Return (restore state).
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -32,7 +31,7 @@ pub enum SwitchKind {
         /// Which project the user came from (if this was a project switch)
         from_project: Option<String>,
     },
-    /// Activity timeout — user has been back long enough, clear ghosts
+    /// Activity timeout - user has been back long enough, clear ghosts
     Timeout,
 }
 
@@ -102,7 +101,7 @@ impl SwitchDetector {
 
         // Determine event
         if switched_from.is_some() {
-            // Project switch — departure from old, return to new
+            // Project switch - departure from old, return to new
             Some(SwitchEvent {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
@@ -111,7 +110,7 @@ impl SwitchDetector {
                 timestamp: Utc::now(),
             })
         } else if was_absent {
-            // Long absence — treat as return
+            // Long absence - treat as return
             Some(SwitchEvent {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
@@ -139,11 +138,11 @@ impl SwitchDetector {
         let now = Instant::now();
         let mut projects = self.projects.lock().ok()?;
 
-        for (dir, tracker) in projects.iter_mut() {
+        for (_dir, tracker) in projects.iter_mut() {
             if tracker.ghost_active {
                 if let Some(displayed_at) = tracker.ghost_displayed_at {
                     if now.duration_since(displayed_at) > self.ghost_ttl {
-                        // Ghost has been visible long enough — user is back in flow
+                        // Ghost has been visible long enough - user is back in flow
                         tracker.ghost_active = false;
                         tracker.ghost_displayed_at = None;
                         return Some(SwitchEvent {

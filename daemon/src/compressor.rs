@@ -1,8 +1,8 @@
-//! Context compression — WorkingState → ContextCard
+//! Context compression - WorkingState → ContextCard
 //!
 //! Two modes:
 //! 1. Rule-based: a smart engine that produces LLM-quality context cards
-//!    from signals alone — no API calls, no network, pure pattern matching.
+//!    from signals alone - no API calls, no network, pure pattern matching.
 //! 2. LLM-based: sends signals to a local or remote LLM for natural language compression
 //!
 //! The rule-based mode is always available and produces human-quality output
@@ -126,6 +126,8 @@ fn classify_intent(state: &WorkingState) -> Intent {
             scores.push((Intent::Deploying, 7));
         } else if branch.starts_with("chore/") || branch.starts_with("cleanup/") {
             scores.push((Intent::Cleaning, 6));
+        } else if branch.starts_with("review/") {
+            scores.push((Intent::Reviewing, 8));
         }
 
         // From git status composition
@@ -168,6 +170,21 @@ fn classify_intent(state: &WorkingState) -> Intent {
             || cmd_lower.contains("prettier") || cmd_lower.contains("black")
         {
             scores.push((Intent::Refactoring, 4));
+        } else if cmd_lower.starts_with("gh pr") || cmd_lower.starts_with("git log")
+            || cmd_lower.starts_with("git blame") || cmd_lower.starts_with("git show")
+        {
+            scores.push((Intent::Reviewing, 5));
+        } else if first == "rg" || first == "grep" || first == "ag" || first == "fd"
+            || first == "find" || first == "bat" || first == "tree"
+        {
+            scores.push((Intent::Exploring, 3));
+        }
+    }
+
+    // Nothing being edited plus read-only signals leans exploratory
+    if let Some(ref git) = state.git {
+        if git.changed_files.is_empty() {
+            scores.push((Intent::Exploring, 2));
         }
     }
 
@@ -613,7 +630,7 @@ fn rewrite_commit_message(raw: &str) -> String {
             }
         }
         _ => {
-            // No recognized verb prefix — use the message as-is, lowercased
+            // No recognized verb prefix - use the message as-is, lowercased
             let mut s = msg.to_string();
             if let Some(first_char) = s.get_mut(..1) {
                 first_char.make_ascii_lowercase();
@@ -623,7 +640,7 @@ fn rewrite_commit_message(raw: &str) -> String {
     }
 }
 
-/// Clean up the body of a commit message — expand abbreviations, add articles
+/// Clean up the body of a commit message - expand abbreviations, add articles
 fn humanize_commit_body(body: &str) -> String {
     let mut s = body.to_string();
 
@@ -666,12 +683,12 @@ fn humanize_commit_body(body: &str) -> String {
     }
 
     // Replace colons with dashes for readability
-    // "Fix WebSocket: correct subscription format" → "the WebSocket — correcting subscription format"
+    // "Fix WebSocket: correct subscription format" → "the WebSocket - correcting subscription format"
     if let Some(colon_pos) = s.find(':') {
         let before = s[..colon_pos].trim();
         let after = s[colon_pos + 1..].trim();
         if !after.is_empty() {
-            s = format!("{before} — {after}");
+            s = format!("{before} - {after}");
         }
     }
 
@@ -768,7 +785,7 @@ fn cluster_file_changes(state: &WorkingState) -> Option<String> {
             parts.push(format!("{remainder} other file{}", if remainder == 1 { "" } else { "s" }));
         }
 
-        let mut s = format!("{total} files changed — {}", parts.join(", "));
+        let mut s = format!("{total} files changed - {}", parts.join(", "));
         if additions > 0 || deletions > 0 {
             s.push_str(&format_diff_natural(additions, deletions));
         }
@@ -797,14 +814,14 @@ fn parse_diff_stats(stat: &str) -> (usize, usize) {
     (additions, deletions)
 }
 
-/// Format diff stats naturally: " — 45 lines added, 12 removed"
+/// Format diff stats naturally: " - 45 lines added, 12 removed"
 fn format_diff_natural(additions: usize, deletions: usize) -> String {
     match (additions > 0, deletions > 0) {
-        (true, true) => format!(" — {additions} line{} added, {deletions} removed",
+        (true, true) => format!(" - {additions} line{} added, {deletions} removed",
             if additions == 1 { "" } else { "s" }),
-        (true, false) => format!(" — {additions} line{} added",
+        (true, false) => format!(" - {additions} line{} added",
             if additions == 1 { "" } else { "s" }),
-        (false, true) => format!(" — {deletions} line{} removed",
+        (false, true) => format!(" - {deletions} line{} removed",
             if deletions == 1 { "" } else { "s" }),
         (false, false) => String::new(),
     }
@@ -882,14 +899,14 @@ fn predict_next_step(state: &WorkingState) -> String {
             if git.map_or(false, |g| g.modified > 0) {
                 return "Run tests again to see if your changes fix the failures.".into();
             }
-            return "Tests were running — check if they pass and commit if green.".into();
+            return "Tests were running - check if they pass and commit if green.".into();
         }
     }
 
     // Rule 2: Staged changes with nothing else pending
     if let Some(g) = git {
         if g.staged > 0 && g.modified == 0 && g.untracked == 0 {
-            return "You've got staged changes ready — commit them.".into();
+            return "You've got staged changes ready - commit them.".into();
         }
 
         // Rule 3: Staged + unstaged → tests in changed files?
@@ -916,7 +933,7 @@ fn predict_next_step(state: &WorkingState) -> String {
 
         // Rule 5: Many files changed, no commits recently
         if g.changed_files.len() > 8 {
-            return "That's a lot of changes — consider breaking them into smaller commits.".into();
+            return "That's a lot of changes - consider breaking them into smaller commits.".into();
         }
 
         // Rule 6: New file created that might need wiring
@@ -937,7 +954,7 @@ fn predict_next_step(state: &WorkingState) -> String {
                 | "go.sum" | "Pipfile" | "requirements.txt" | "Gemfile"
                 | "poetry.lock" | "pyproject.toml")
         }) {
-            return "Dependencies changed — run install to sync.".into();
+            return "Dependencies changed - run install to sync.".into();
         }
 
         // Rule 8: Migration file created
@@ -946,7 +963,7 @@ fn predict_next_step(state: &WorkingState) -> String {
             (lower.contains("migration") || lower.contains("migrate"))
                 && matches!(f.status, ChangeStatus::Added | ChangeStatus::Untracked)
         }) {
-            return "You've got a new migration — run it against the database.".into();
+            return "You've got a new migration - run it against the database.".into();
         }
 
         // Rule 9: On feature branch, changes look complete
@@ -954,7 +971,7 @@ fn predict_next_step(state: &WorkingState) -> String {
         if branch != "main" && branch != "master" && branch != "dev"
             && g.staged == 0 && g.modified == 0 && g.untracked == 0
         {
-            return "Branch looks clean — might be ready for a PR.".into();
+            return "Branch looks clean - might be ready for a PR.".into();
         }
 
         // Rule 10: Unstaged changes, no tests
@@ -976,7 +993,7 @@ fn predict_next_step(state: &WorkingState) -> String {
         if cmd_lower.starts_with("npm install") || cmd_lower.starts_with("yarn add")
             || cmd_lower.starts_with("cargo add") || cmd_lower.starts_with("pip install")
         {
-            return "Dependencies updated — continue with your changes.".into();
+            return "Dependencies updated - continue with your changes.".into();
         }
 
         // Git stash
@@ -986,7 +1003,7 @@ fn predict_next_step(state: &WorkingState) -> String {
 
         // Git add
         if cmd_lower.starts_with("git add") {
-            return "Files are staged — commit when ready.".into();
+            return "Files are staged - commit when ready.".into();
         }
 
         // Deploy commands
@@ -998,7 +1015,7 @@ fn predict_next_step(state: &WorkingState) -> String {
 
         // Dev server
         if cmd_lower.contains("dev") && (cmd_lower.contains("run") || cmd_lower.contains("start")) {
-            return "Dev server was running — continue building.".into();
+            return "Dev server was running - continue building.".into();
         }
     }
 
@@ -1042,7 +1059,7 @@ fn temporal_frame(state: &WorkingState) -> &'static str {
     } else if minutes < 4320 {
         pick_variant(&["A few days ago you were", "A couple days ago you were"])
     } else {
-        // > 3 days — use weekday
+        // > 3 days - use weekday
         let weekday = state.timestamp.weekday();
         match weekday {
             chrono::Weekday::Mon => "Last Monday you were",
@@ -1079,7 +1096,7 @@ const TEMPLATES: &[&str] = &[
     // Short and punchy
     "{temporal} {intent} {topic} in {project}.",
     // Commit + doing
-    "{temporal} {intent} {topic} — {commit}.",
+    "{temporal} {intent} {topic} - {commit}.",
     // Branch-aware
     "On `{branch}`, you were {intent} {topic}. {cluster}.",
     // Doing + project context
@@ -1099,7 +1116,7 @@ const TEMPLATES: &[&str] = &[
     // Branch-forward
     "You're on `{branch}`, {intent} {topic}. {cluster}.",
     // Simple past with commit
-    "You were {intent} {topic} — last commit was {commit}.",
+    "You were {intent} {topic} - last commit was {commit}.",
     // Cluster-led minimal
     "{cluster}. Last commit: {commit}.",
     // Project + branch combo
@@ -1111,7 +1128,7 @@ const TEMPLATES: &[&str] = &[
     // With file focus
     "{temporal} focused on {active_file}, {intent} {topic}.",
     // Clean narrative
-    "You were {past} {topic} — {cluster}.",
+    "You were {past} {topic} - {cluster}.",
     // Commit as context, cluster as evidence
     "{commit}. {cluster}.",
     // Short branch
@@ -1130,7 +1147,7 @@ const TEMPLATES: &[&str] = &[
     "Last commit was {commit}. You were {intent} {topic}.",
 ];
 
-/// Card depth — controls how much context to include
+/// Card depth - controls how much context to include
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum CardDepth {
     /// < 30min absence: 1 sentence, minimal detail
@@ -1274,7 +1291,7 @@ fn extract_topic(state: &WorkingState) -> String {
 /// "fixing WebSocket reconnection" → "WebSocket reconnection"
 /// "adding user authentication" → "user authentication"
 fn extract_object_from_rewrite(rewrite: &str) -> String {
-    // The rewrite starts with a gerund verb — try to strip it
+    // The rewrite starts with a gerund verb - try to strip it
     let gerunds = [
         "fixing ", "adding ", "updating ", "refactoring ", "removing ",
         "merging ", "testing ", "bumping ", "reverting ", "setting up ",
@@ -1297,7 +1314,7 @@ fn extract_object_from_rewrite(rewrite: &str) -> String {
 
 // ─── Main Entry Point ───────────────────────────────────────────────────────
 
-/// Rule-based compression — no LLM required
+/// Rule-based compression - no LLM required
 ///
 /// Produces LLM-quality context cards by analyzing signal patterns through
 /// seven engines: intent classification, path semantics, commit rewriting,
@@ -1389,7 +1406,7 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
             // Good content but missing project name
             format!("In {}: {}", state.project_name, s)
         } else {
-            // Thin summary — build a reliable one from raw signals
+            // Thin summary - build a reliable one from raw signals
             let mut parts = vec![format!("{} in {}", temporal, state.project_name)];
             if !commit_context.is_empty() {
                 parts.push(format!("you were {} {}", intent.verb(), commit_context));
@@ -1468,7 +1485,7 @@ fn clean_summary(s: &str) -> String {
 
 // ─── LLM-based compression (unchanged) ─────────────────────────────────────
 
-/// LLM-based compression — sends signals to a model for natural language synthesis
+/// LLM-based compression - sends signals to a model for natural language synthesis
 pub async fn llm_compress(state: &WorkingState, config: &LlmConfig) -> Result<ContextCard> {
     let prompt = build_llm_prompt(state);
 
@@ -1774,8 +1791,8 @@ mod tests {
 
     #[test]
     fn test_format_diff_natural() {
-        assert_eq!(format_diff_natural(45, 12), " — 45 lines added, 12 removed");
-        assert_eq!(format_diff_natural(1, 0), " — 1 line added");
+        assert_eq!(format_diff_natural(45, 12), " - 45 lines added, 12 removed");
+        assert_eq!(format_diff_natural(1, 0), " - 1 line added");
         assert_eq!(format_diff_natural(0, 0), "");
     }
 

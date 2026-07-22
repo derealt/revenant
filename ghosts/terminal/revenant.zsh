@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# REVENANT — Zsh Shell Integration
+# REVENANT - Zsh Shell Integration
 #
 # Source this in your .zshrc:
 #   [ -f ~/.config/revenant/revenant.zsh ] && source ~/.config/revenant/revenant.zsh
@@ -56,7 +56,7 @@ except:
 __revenant_track_cd() {
     local new_dir="$(pwd)"
     if [[ -n "${REVENANT_LAST_DIR}" && "${new_dir}" != "${REVENANT_LAST_DIR}" ]]; then
-        # Directory changed — notify daemon via state file
+        # Directory changed - notify daemon via state file
         echo "${new_dir}" > "${HOME}/.revenant/cwd" 2>/dev/null
     fi
     REVENANT_LAST_DIR="${new_dir}"

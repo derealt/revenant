@@ -1,4 +1,4 @@
-//! Signal sources — each module captures one dimension of user state
+//! Signal sources - each module captures one dimension of user state
 
 pub mod browser;
 pub mod clipboard;

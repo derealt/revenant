@@ -1,4 +1,4 @@
-//! Terminal ghost — writes context cards to ~/.revenant/motd
+//! Terminal ghost - writes context cards to ~/.revenant/motd
 //!
 //! The shell integration scripts (revenant.zsh, revenant.bash, revenant.fish)
 //! source this file on every new shell session, displaying the ghost
@@ -47,13 +47,13 @@ impl TerminalGhost {
             "{dim}\u{2554}\u{2550}\u{2550}{reset}{accent} {header}{reset}{dim} \u{2550}\u{2550}\u{2557}{reset}\n",
         ));
 
-        // Summary line — white for legibility
+        // Summary line - white for legibility
         motd.push_str(&format!(
             "{dim}\u{2551}{reset} {white}{summary}{reset}\n",
             summary = card.summary,
         ));
 
-        // Next step line — gold accent
+        // Next step line - gold accent
         if !card.next_step.is_empty() {
             motd.push_str(&format!(
                 "{dim}\u{2551}{reset} {gold}\u{2192} {next}{reset}\n",

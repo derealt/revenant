@@ -1,4 +1,4 @@
-# REVENANT — Rule-Based Compression Templates
+# REVENANT - Rule-Based Compression Templates
 #
 # When no LLM is configured, the compressor uses these pattern-matching
 # rules to generate context cards from raw signals.
@@ -9,15 +9,15 @@
 # - `priority`: higher priority rules appear first in the summary
 #
 # Template variables:
-#   {branch}        — git branch name
-#   {files}         — comma-separated changed file names
-#   {file_count}    — number of changed files
-#   {active_file}   — most recently edited file
-#   {language}      — detected language of active file
-#   {last_commit}   — most recent commit message
-#   {commands}      — recent terminal commands
-#   {diff_stat}     — git diff statistics
-#   {project}       — project directory name
+#   {branch}        - git branch name
+#   {files}         - comma-separated changed file names
+#   {file_count}    - number of changed files
+#   {active_file}   - most recently edited file
+#   {language}      - detected language of active file
+#   {last_commit}   - most recent commit message
+#   {commands}      - recent terminal commands
+#   {diff_stat}     - git diff statistics
+#   {project}       - project directory name
 
 # ─── Git Signals ────────────────────────────────────────────────────
 

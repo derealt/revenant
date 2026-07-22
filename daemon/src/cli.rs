@@ -1,8 +1,8 @@
-//! `rev` CLI — the human interface to the REVENANT daemon
+//! `rvn` CLI - the human interface to the REVENANT daemon
 //!
-//! This is a separate binary (`rev`) that communicates with the daemon
+//! This is a separate binary (`rvn`) that communicates with the daemon
 //! via SQLite (read-only), PID files, and launchctl. It never runs the
-//! daemon itself — it controls and queries it.
+//! daemon itself - it controls and queries it.
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -15,8 +15,8 @@ use std::process::Command;
 
 #[derive(Parser)]
 #[command(
-    name = "rev",
-    about = "REVENANT — cognitive context restoration",
+    name = "rvn",
+    about = "REVENANT - cognitive context restoration",
     long_about = "Control the REVENANT daemon and query your context history.\n\
                   REVENANT captures what you were doing when you leave a task\n\
                   and restores it as ghost annotations when you return.",
@@ -194,7 +194,7 @@ fn open_db_readonly() -> Result<Connection> {
     let path = db_path();
     if !path.exists() {
         bail!(
-            "no database found at {}. Is the daemon running? Run `rev init` first.",
+            "no database found at {}. Is the daemon running? Run `rvn init` first.",
             path.display()
         );
     }
@@ -315,7 +315,7 @@ fn launchctl_load() -> Result<()> {
     let plist = plist_path();
     if !plist.exists() {
         bail!(
-            "LaunchAgent plist not found at {}. Run `rev init` first.",
+            "LaunchAgent plist not found at {}. Run `rvn init` first.",
             plist.display()
         );
     }
@@ -340,7 +340,7 @@ fn launchctl_unload() -> Result<()> {
     let plist = plist_path();
     if !plist.exists() {
         bail!(
-            "LaunchAgent plist not found at {}. Run `rev init` first.",
+            "LaunchAgent plist not found at {}. Run `rvn init` first.",
             plist.display()
         );
     }
@@ -480,7 +480,7 @@ fn cmd_init() -> Result<()> {
             .append(true)
             .open(&zshrc)?;
         writeln!(file)?;
-        writeln!(file, "# REVENANT — cognitive context restoration")?;
+        writeln!(file, "# REVENANT - cognitive context restoration")?;
         writeln!(file, "{}", hook_line)?;
         println!(
             "\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m shell hook added to {}",
@@ -504,7 +504,7 @@ fn cmd_init() -> Result<()> {
     println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500} revenant is awake \u{2500}\u{2500}\u{2500}\x1b[0m");
     println!();
     println!("  Open a new terminal to activate the shell hook.");
-    println!("  Run \x1b[36mrev status\x1b[0m to verify the daemon is running.");
+    println!("  Run \x1b[36mrvn status\x1b[0m to verify the daemon is running.");
     println!("  Run \x1b[36mrev test\x1b[0m to inject a synthetic ghost.");
 
     Ok(())
@@ -589,9 +589,38 @@ fn cmd_status() -> Result<()> {
     print_channel_status("vscode", rev.join("vscode.sock").exists());
     print_channel_status("slack", rev.join("slack.sock").exists());
     print_channel_status("obsidian", rev.join("obsidian-state.json").exists());
-    print_channel_status("browser", rev.join("browser-state.json").exists());
+    print_channel_status("browser", ghost_server_reachable());
 
     println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
+    Ok(())
+}
+
+/// The daemon serves the browser ghost over localhost HTTP; reachable = active
+fn ghost_server_reachable() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], 7711)),
+        std::time::Duration::from_millis(300),
+    )
+    .is_ok()
+}
+
+/// POST to the daemon's ghost HTTP server (used by clear/test for the browser channel)
+fn ghost_server_post(path: &str, body: &str) -> Result<()> {
+    use std::io::{Read, Write};
+    let timeout = std::time::Duration::from_millis(500);
+    let mut stream = std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], 7711)),
+        timeout,
+    )?;
+    stream.set_write_timeout(Some(timeout))?;
+    stream.set_read_timeout(Some(timeout))?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:7711\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes())?;
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
     Ok(())
 }
 
@@ -655,9 +684,10 @@ fn cmd_history(project: Option<String>, count: usize) -> Result<()> {
         let age = format_age(card.created_at);
         println!("\x1b[2m\u{2502}\x1b[0m");
         println!(
-            "\x1b[2m\u{2502}\x1b[0m \x1b[2m[{}]\x1b[0m \x1b[35m{}\x1b[0m \x1b[2m\u{2014} {} ago\x1b[0m",
+            "\x1b[2m\u{2502}\x1b[0m \x1b[2m[{}]\x1b[0m \x1b[35m{}\x1b[0m \x1b[2m({}) {} ago\x1b[0m",
             i + 1,
             card.project_name,
+            card.project_dir,
             age
         );
         println!("\x1b[2m\u{2502}\x1b[0m   \x1b[36m{}\x1b[0m", card.summary);
@@ -693,7 +723,7 @@ fn cmd_on() -> Result<()> {
         }
         _ => {
             println!("\x1b[33mdaemon may still be starting...\x1b[0m");
-            println!("run \x1b[36mrev status\x1b[0m in a moment to check");
+            println!("run \x1b[36mrvn status\x1b[0m in a moment to check");
         }
     }
     Ok(())
@@ -798,15 +828,17 @@ fn update_config_value(key_path: &str, value: &str) -> Result<()> {
     }
 
     if !found {
-        // Append to section or create section
-        if !section.is_empty() {
-            let section_exists = lines.iter().any(|l| l.trim() == section_header);
-            if !section_exists {
-                lines.push(String::new());
-                lines.push(section_header);
-            }
+        if section.is_empty() {
+            lines.push(format!("{} = {}", key, value));
+        } else if let Some(header_idx) = lines.iter().position(|l| l.trim() == section_header) {
+            // Insert right after the existing section header, NOT at end of
+            // file where it would land in whatever section comes last
+            lines.insert(header_idx + 1, format!("{} = {}", key, value));
+        } else {
+            lines.push(String::new());
+            lines.push(section_header);
+            lines.push(format!("{} = {}", key, value));
         }
-        lines.push(format!("{} = {}", key, value));
     }
 
     std::fs::write(&config, lines.join("\n") + "\n")?;
@@ -830,12 +862,12 @@ fn cmd_setup(
             println!("\x1b[2m│\x1b[0m LLM compression turns raw signals into natural-language");
             println!("\x1b[2m│\x1b[0m context cards. Without it, cards are rule-based (still works,");
             println!("\x1b[2m│\x1b[0m just less eloquent). Your data never touches REVENANT servers");
-            println!("\x1b[2m│\x1b[0m — the API call goes directly from your machine to the provider.");
+            println!("\x1b[2m│\x1b[0m - the API call goes directly from your machine to the provider.");
             println!("\x1b[2m│\x1b[0m");
             println!("\x1b[2m│\x1b[0m Providers:");
-            println!("\x1b[2m│\x1b[0m   \x1b[36mclaude\x1b[0m   — Best quality. ~$0.50/month (Haiku) or ~$2/month (Sonnet)");
-            println!("\x1b[2m│\x1b[0m   \x1b[36mopenai\x1b[0m   — Good quality. ~$0.30/month (GPT-4o-mini)");
-            println!("\x1b[2m│\x1b[0m   \x1b[36mollama\x1b[0m   — Free. Runs locally. Needs ~4GB disk.");
+            println!("\x1b[2m│\x1b[0m   \x1b[36mclaude\x1b[0m   - Best quality. ~$0.50/month (Haiku) or ~$2/month (Sonnet)");
+            println!("\x1b[2m│\x1b[0m   \x1b[36mopenai\x1b[0m   - Good quality. ~$0.30/month (GPT-4o-mini)");
+            println!("\x1b[2m│\x1b[0m   \x1b[36mollama\x1b[0m   - Free. Runs locally. Needs ~4GB disk.");
             println!("\x1b[2m│\x1b[0m");
 
             let prov = provider.unwrap_or_else(|| read_stdin_line("\x1b[2m│\x1b[0m Provider (claude/openai/ollama): "));
@@ -914,7 +946,7 @@ fn cmd_setup(
             println!("\x1b[2m\u{2502}\x1b[0m");
             println!("\x1b[2m\u{2502}\x1b[0m Ensure this is in your config.toml:");
             println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
-            println!("\x1b[2m\u{2502}\x1b[0m   vscode = true");
+            println!("\x1b[2m\u{2502}\x1b[0m   vscode_enabled = true");
             println!("\x1b[2m\u{2502}\x1b[0m   [ghosts.vscode]");
             println!("\x1b[2m\u{2502}\x1b[0m   socket_path = \"~/.revenant/vscode.sock\"");
             println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
@@ -923,37 +955,9 @@ fn cmd_setup(
         "browser" => {
             println!("\x1b[2m\u{250c}\u{2500}\u{2500}\u{2500} Browser Ghost Setup \u{2500}\u{2500}\u{2500}\x1b[0m");
             println!("\x1b[2m\u{2502}\x1b[0m");
-            println!("\x1b[2m\u{2502}\x1b[0m The browser extension polls ~/.revenant/browser-state.json");
-            println!("\x1b[2m\u{2502}\x1b[0m for context cards, or uses Chrome's native messaging API.");
-            println!("\x1b[2m\u{2502}\x1b[0m");
-
-            // Install native messaging host manifest for Chrome
-            let nm_dir = home_dir()
-                .join("Library/Application Support/Google/Chrome/NativeMessagingHosts");
-            std::fs::create_dir_all(&nm_dir)?;
-
-            let daemon_bin = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("revenant")))
-                .unwrap_or_else(|| PathBuf::from("/usr/local/bin/revenant"));
-
-            let nm_manifest = serde_json::json!({
-                "name": "com.revenant.ghost",
-                "description": "REVENANT Ghost \u{2014} cognitive context restoration",
-                "path": daemon_bin.to_string_lossy(),
-                "type": "stdio",
-                "allowed_origins": [
-                    "chrome-extension://*/"
-                ]
-            });
-
-            let nm_path = nm_dir.join("com.revenant.ghost.json");
-            std::fs::write(&nm_path, serde_json::to_string_pretty(&nm_manifest)?)?;
-            println!(
-                "\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m native messaging host: {}",
-                nm_path.display()
-            );
-
+            println!("\x1b[2m\u{2502}\x1b[0m The extension polls the daemon at http://127.0.0.1:7711/ghost");
+            println!("\x1b[2m\u{2502}\x1b[0m and shows the context card as a banner. No native messaging,");
+            println!("\x1b[2m\u{2502}\x1b[0m no other setup on the daemon side.");
             println!("\x1b[2m\u{2502}\x1b[0m");
             println!("\x1b[2m\u{2502}\x1b[0m To build the extension:");
 
@@ -970,8 +974,9 @@ fn cmd_setup(
             }
             println!("\x1b[2m\u{2502}\x1b[0m   Then load as unpacked extension in chrome://extensions");
             println!("\x1b[2m\u{2502}\x1b[0m");
-            println!("\x1b[2m\u{2502}\x1b[0m Ensure this is in your config.toml:");
-            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
+            println!("\x1b[2m\u{2502}\x1b[0m Optional: let the daemon see your active tab as a context");
+            println!("\x1b[2m\u{2502}\x1b[0m signal (off by default). In config.toml:");
+            println!("\x1b[2m\u{2502}\x1b[0m   [signals]");
             println!("\x1b[2m\u{2502}\x1b[0m   browser = true");
             println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
         }
@@ -998,11 +1003,21 @@ fn cmd_setup(
             }
 
             println!("\x1b[2m\u{2502}\x1b[0m");
-            println!("\x1b[2m\u{2502}\x1b[0m Ensure this is in your config.toml:");
-            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
-            println!("\x1b[2m\u{2502}\x1b[0m   obsidian = true");
-            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts.obsidian]");
-            println!("\x1b[2m\u{2502}\x1b[0m   vault_path = \"/path/to/your/vault\"");
+            if let Some(ref vault) = vault {
+                update_config_value("ghosts.obsidian_enabled", "true")?;
+                update_config_value("ghosts.obsidian.vault_path", &format!("\"{}\"", vault))?;
+                println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m✓\x1b[0m obsidian ghost enabled for vault: {vault}");
+                println!("\x1b[2m\u{2502}\x1b[0m Restart the daemon to apply: \x1b[36mrvn off && rvn on\x1b[0m");
+            } else {
+                println!("\x1b[2m\u{2502}\x1b[0m Enable it with your vault path:");
+                println!("\x1b[2m\u{2502}\x1b[0m   rvn setup obsidian --vault /path/to/your/vault");
+                println!("\x1b[2m\u{2502}\x1b[0m");
+                println!("\x1b[2m\u{2502}\x1b[0m Or in config.toml:");
+                println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
+                println!("\x1b[2m\u{2502}\x1b[0m   obsidian_enabled = true");
+                println!("\x1b[2m\u{2502}\x1b[0m   [ghosts.obsidian]");
+                println!("\x1b[2m\u{2502}\x1b[0m   vault_path = \"/path/to/your/vault\"");
+            }
             println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
         }
 
@@ -1018,13 +1033,27 @@ fn cmd_setup(
             println!("\x1b[2m\u{2502}\x1b[0m 4. Copy the Bot User OAuth Token (xoxb-...)");
             println!("\x1b[2m\u{2502}\x1b[0m 5. Find your Slack User ID (click your profile > ...)");
             println!("\x1b[2m\u{2502}\x1b[0m");
-            println!("\x1b[2m\u{2502}\x1b[0m Add to your config.toml:");
-            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
-            println!("\x1b[2m\u{2502}\x1b[0m   slack = true");
-            println!("\x1b[2m\u{2502}\x1b[0m   [ghosts.slack]");
-            println!("\x1b[2m\u{2502}\x1b[0m   bot_token = \"xoxb-your-token\"");
-            println!("\x1b[2m\u{2502}\x1b[0m   user_id = \"U0XXXXXXX\"");
-            println!("\x1b[2m\u{2502}\x1b[0m   channel_id = \"C0XXXXXXX\"");
+            if let (Some(ref token), Some(ref user)) = (&token, &user) {
+                update_config_value("ghosts.slack_enabled", "true")?;
+                update_config_value("ghosts.slack.bot_token", &format!("\"{}\"", token))?;
+                update_config_value("ghosts.slack.user_id", &format!("\"{}\"", user))?;
+                if let Some(ref cid) = channel_id {
+                    update_config_value("ghosts.slack.channel_id", &format!("\"{}\"", cid))?;
+                }
+                println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m✓\x1b[0m slack ghost enabled for user {user}");
+                println!("\x1b[2m\u{2502}\x1b[0m Restart the daemon to apply: \x1b[36mrvn off && rvn on\x1b[0m");
+            } else {
+                println!("\x1b[2m\u{2502}\x1b[0m Enable it with your credentials:");
+                println!("\x1b[2m\u{2502}\x1b[0m   rvn setup slack --token xoxb-... --user U0XXXXXXX --channel-id C0XXXXXXX");
+                println!("\x1b[2m\u{2502}\x1b[0m");
+                println!("\x1b[2m\u{2502}\x1b[0m Or in config.toml:");
+                println!("\x1b[2m\u{2502}\x1b[0m   [ghosts]");
+                println!("\x1b[2m\u{2502}\x1b[0m   slack_enabled = true");
+                println!("\x1b[2m\u{2502}\x1b[0m   [ghosts.slack]");
+                println!("\x1b[2m\u{2502}\x1b[0m   bot_token = \"xoxb-your-token\"");
+                println!("\x1b[2m\u{2502}\x1b[0m   user_id = \"U0XXXXXXX\"");
+                println!("\x1b[2m\u{2502}\x1b[0m   channel_id = \"C0XXXXXXX\"");
+            }
             println!("\x1b[2m\u{2502}\x1b[0m");
             let sock = revenant_dir().join("slack.sock");
             println!("\x1b[2m\u{2502}\x1b[0m Socket path: {}", sock.display());
@@ -1051,9 +1080,8 @@ fn cmd_clear() -> Result<()> {
     let _ = std::fs::remove_file(&motd);
     let _ = std::fs::remove_file(&active);
 
-    // Clear browser ghost
-    let browser_state = rev_dir.join("browser-state.json");
-    let _ = std::fs::write(&browser_state, r#"{"type":"clear"}"#);
+    // Clear browser ghost (served by the daemon on localhost:7711)
+    let _ = ghost_server_post("/clear", "");
 
     // Clear obsidian ghost
     let obsidian_state = rev_dir.join("obsidian-state.json");
@@ -1124,7 +1152,7 @@ fn cmd_test() -> Result<()> {
 
     let summary = format!(
         "You were testing the REVENANT ghost system in {project_name}. \
-         This is a synthetic card injected by `rev test` to verify all ghost channels."
+         This is a synthetic card injected by `rvn test` to verify all ghost channels."
     );
     let next_step = "Check each enabled ghost channel to confirm the annotation appeared.";
 
@@ -1199,10 +1227,11 @@ fn cmd_test() -> Result<()> {
     std::fs::write(&obsidian_state, serde_json::to_string_pretty(&card_json)?)?;
     println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m obsidian ghost (state file)");
 
-    // Dispatch to browser ghost (write state file)
-    let browser_state = rev_dir.join("browser-state.json");
-    std::fs::write(&browser_state, serde_json::to_string_pretty(&card_json)?)?;
-    println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m browser ghost (state file)");
+    // Dispatch to browser ghost (the daemon serves it on localhost:7711)
+    match ghost_server_post("/inject", &serde_json::to_string(&card_json)?) {
+        Ok(()) => println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m browser ghost (daemon http)"),
+        Err(_) => println!("\x1b[2m\u{2502}\x1b[0m \x1b[2m-\x1b[0m browser ghost (daemon not running)"),
+    }
 
     println!("\x1b[2m\u{2502}\x1b[0m");
     println!("\x1b[2m\u{2502}\x1b[0m card id: \x1b[2m{card_id}\x1b[0m");
@@ -1403,7 +1432,7 @@ fn cmd_digest(days: u64) -> Result<()> {
     println!(
         "\x1b[2m\u{255a}\u{2550}\u{2550} {} \u{2550}\u{2550}\u{255d}\x1b[0m",
         if switch_count > 50 {
-            "heavy multitasking \u{2014} consider deeper focus blocks"
+            "heavy multitasking - consider deeper focus blocks"
         } else if switch_count > 20 {
             "moderate context switching"
         } else {

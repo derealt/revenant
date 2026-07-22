@@ -1,5 +1,5 @@
 /**
- * REVENANT Ghost — Chrome Extension Content Script
+ * REVENANT Ghost - Chrome Extension Content Script
  *
  * Injects a subtle, dismissible banner at the top of web pages
  * carrying the context card. The banner is minimal, translucent,
