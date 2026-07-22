@@ -26,7 +26,7 @@ struct Daemon {
     config: RevenantConfig,
     store: ContextStore,
     aggregator: SnapshotAggregator,
-    detector: SwitchDetector,
+    detector: Arc<SwitchDetector>,
     dispatcher: GhostDispatcher,
 }
 
@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
 
     // Build components
     let aggregator = SnapshotAggregator::new(&config);
-    let detector = SwitchDetector::new(&config);
+    let detector = Arc::new(SwitchDetector::new(&config));
     let dispatcher = GhostDispatcher::new(&config)?;
 
     let daemon = Arc::new(RwLock::new(Daemon {
@@ -124,11 +124,18 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Spawn file watcher
+    // Spawn file watcher; it feeds every event into the detector so
+    // active_project and branch polling always know where the user is
     let watcher_config = config.clone();
     let watcher_switch_tx = switch_tx.clone();
+    let watcher_detector = {
+        let d = daemon.read().await;
+        Arc::clone(&d.detector)
+    };
     tokio::spawn(async move {
-        if let Err(e) = watcher::run_watcher(watcher_config, watcher_switch_tx).await {
+        if let Err(e) =
+            watcher::run_watcher(watcher_config, watcher_switch_tx, watcher_detector).await
+        {
             error!("file watcher failed: {e}");
         }
     });

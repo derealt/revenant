@@ -15,12 +15,14 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::config::RevenantConfig;
-use crate::detector::{SwitchEvent, SwitchKind};
+use crate::detector::{SwitchDetector, SwitchEvent, SwitchKind};
+use std::sync::Arc;
 
 /// Run the file watcher, sending activity signals to the switch detector
 pub async fn run_watcher(
     config: RevenantConfig,
     switch_tx: mpsc::Sender<SwitchEvent>,
+    detector: Arc<SwitchDetector>,
 ) -> Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<notify::Result<Event>>(256);
 
@@ -109,6 +111,12 @@ pub async fn run_watcher(
 
                     if let Some(ref project) = project_dir {
                         let project_str = project.to_string_lossy().to_string();
+
+                        // Keep the detector's view current (active project,
+                        // per-project trackers for branch polling). The
+                        // watcher stays the authority on switch decisions,
+                        // so the detector's own verdict is discarded.
+                        let _ = detector.record_activity(&project_str);
 
                         // Detect project change
                         let project_changed = active_project
