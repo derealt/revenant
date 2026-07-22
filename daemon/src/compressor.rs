@@ -490,8 +490,9 @@ fn humanize_segment(s: &str) -> String {
 fn strip_conventional_prefix(msg: &str) -> &str {
     let prefixes = [
         "feat:", "fix:", "chore:", "docs:", "refactor:", "test:", "style:",
-        "perf:", "ci:", "build:", "revert:", "feat(", "fix(", "chore(",
-        "docs(", "refactor(", "test(", "style(", "perf(", "ci(", "build(",
+        "perf:", "ci:", "build:", "revert:", "release:", "hotfix:",
+        "feat(", "fix(", "chore(", "docs(", "refactor(", "test(", "style(",
+        "perf(", "ci(", "build(",
     ];
     let trimmed = msg.trim();
     for prefix in &prefixes {
@@ -630,14 +631,84 @@ fn rewrite_commit_message(raw: &str) -> String {
             }
         }
         _ => {
-            // No recognized verb prefix - use the message as-is, lowercased
-            let mut s = msg.to_string();
-            if let Some(first_char) = s.get_mut(..1) {
-                first_char.make_ascii_lowercase();
+            // Commit messages are imperative by convention: if the first
+            // word is a known bare verb, gerundize it so the rewrite reads
+            // as an activity ("clear the timer" -> "clearing the timer")
+            if let Some(gerund) = gerundize_common_verb(first_word) {
+                if rest.is_empty() {
+                    gerund
+                } else {
+                    format!("{} {}", gerund, humanize_commit_body(rest))
+                }
+            } else {
+                // Not a recognized verb - use the message as-is, lowercased
+                let mut s = msg.to_string();
+                if let Some(first_char) = s.get_mut(..1) {
+                    first_char.make_ascii_lowercase();
+                }
+                s
             }
-            s
         }
     }
+}
+
+/// Gerundize a common commit-message verb: "clear" -> "clearing".
+/// Returns None for words that are not recognized bare verbs, so
+/// noun-led messages ("login page polish") pass through untouched.
+fn gerundize_common_verb(word: &str) -> Option<String> {
+    const VERBS: &[&str] = &[
+        "clear", "extract", "rewrite", "split", "wire", "drop", "strip",
+        "expose", "hide", "cache", "load", "save", "parse", "render",
+        "migrate", "upgrade", "downgrade", "pin", "unpin", "use", "make",
+        "handle", "support", "prevent", "avoid", "ensure", "allow",
+        "introduce", "replace", "swap", "convert", "simplify", "optimize",
+        "clean", "polish", "tidy", "restore", "retire", "harden", "guard",
+        "validate", "verify", "normalize", "dedupe", "batch", "throttle",
+        "debounce", "gate", "sync", "align", "inline", "reduce", "raise",
+        "lower", "tighten", "loosen", "connect", "disconnect", "register",
+        "unregister", "track", "log", "warn", "silence", "mute", "document",
+        "port", "adapt", "adjust", "tune", "speed", "stabilize", "isolate",
+        "seal", "ship", "publish", "expand", "shrink", "trim", "prune",
+        "resolve", "correct", "repair", "patch", "address", "rework",
+        "refine", "unify", "consolidate", "streamline", "bind", "unbind",
+        "mount", "unmount", "wrap", "unwrap", "escape", "encode", "decode",
+        "serialize", "deserialize", "compress", "decompress", "flush",
+        "reset", "rebuild", "regenerate", "reindex", "resize", "reorder",
+        "retry", "skip", "defer", "delay", "schedule", "persist", "restrict",
+    ];
+    if !VERBS.contains(&word) {
+        return None;
+    }
+
+    // Standard gerund formation
+    let gerund = if let Some(stem) = word.strip_suffix("ie") {
+        format!("{stem}ying")
+    } else if word.ends_with('e') && !word.ends_with("ee") {
+        format!("{}ing", &word[..word.len() - 1])
+    } else if is_cvc_doubling(word) {
+        let last = word.chars().last().unwrap();
+        format!("{word}{last}ing")
+    } else {
+        format!("{word}ing")
+    };
+    Some(gerund)
+}
+
+/// Consonant-vowel-consonant words double the final consonant
+/// (split -> splitting, pin -> pinning), except w/x/y finals
+fn is_cvc_doubling(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.len() < 3 {
+        return chars.len() == 2; // "up" style, not expected here
+    }
+    let is_vowel = |c: char| "aeiou".contains(c);
+    let n = chars.len();
+    // Only double for short (one-syllable-ish) words to avoid "registerring"
+    n <= 4
+        && !is_vowel(chars[n - 1])
+        && !"wxy".contains(chars[n - 1])
+        && is_vowel(chars[n - 2])
+        && !is_vowel(chars[n - 3])
 }
 
 /// Clean up the body of a commit message - expand abbreviations, add articles
@@ -1308,8 +1379,34 @@ fn extract_object_from_rewrite(rewrite: &str) -> String {
         }
     }
 
+    // Generic gerund strip: only when de-gerundizing the first word yields
+    // a verb we know, so noun-led topics ("landing page") stay intact
+    if let Some((first, rest)) = rewrite.split_once(' ') {
+        if !rest.is_empty() && first.ends_with("ing") && is_known_gerund(first) {
+            return rest.to_string();
+        }
+    }
+
     // If no gerund prefix matched, return as-is
     rewrite.to_string()
+}
+
+/// Is this word a gerund of a verb the rewriter could have produced?
+fn is_known_gerund(word: &str) -> bool {
+    let stem = &word[..word.len() - 3]; // strip "ing"
+    if stem.is_empty() {
+        return false;
+    }
+    // Candidate bare forms: stem, stem+e (wiring -> wire), collapsed
+    // double consonant (splitting -> split)
+    let mut candidates = vec![stem.to_string(), format!("{stem}e")];
+    let chars: Vec<char> = stem.chars().collect();
+    if chars.len() >= 2 && chars[chars.len() - 1] == chars[chars.len() - 2] {
+        candidates.push(stem[..stem.len() - 1].to_string());
+    }
+    candidates
+        .iter()
+        .any(|c| gerundize_common_verb(c).is_some())
 }
 
 // ─── Main Entry Point ───────────────────────────────────────────────────────

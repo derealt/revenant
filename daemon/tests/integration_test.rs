@@ -205,15 +205,15 @@ fn rule_based_compression_produces_specific_second_person_card() {
     assert!(!card.id.is_empty());
     assert_eq!(card.project_dir, state.project_dir);
     assert!(!card.summary.is_empty());
+    let s = card.summary.to_lowercase();
     assert!(
-        card.summary.starts_with("You") || card.summary.contains("you"),
+        s.contains("you"),
         "cards are written to future-you, got: {}",
         card.summary
     );
     // The fixture's signals are a fix-flavored commit on a feature branch
     // touching auth files. A specific card must surface at least one of
     // those concrete facts; a generic card surfaces none.
-    let s = card.summary.to_lowercase();
     assert!(
         s.contains("auth") || s.contains("reconnect") || s.contains("fix"),
         "summary must reference the actual work, got: {}",
