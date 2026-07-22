@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "REVENANT Ghost",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cognitive context restoration - shows what you were doing when you last visited this page",
   "permissions": ["activeTab", "tabs", "storage", "alarms"],
   "background": {
