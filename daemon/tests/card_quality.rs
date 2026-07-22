@@ -249,6 +249,37 @@ fn print_corpus_cards_for_review() {
 }
 
 #[test]
+fn cursor_anchor_sharpens_the_next_step_and_rides_the_card() {
+    use revenant::signals::editor::{CursorAnchor, EditorState};
+
+    let mut s = state("anchored", None, None);
+    s.editor = Some(EditorState {
+        open_files: vec![],
+        active_file: Some("src/reconnect.rs".into()),
+        active_language: Some("rust".into()),
+        cursor: Some(CursorAnchor {
+            file: "/tmp/corpus/anchored/src/reconnect.rs".into(),
+            line: 47,
+        }),
+    });
+
+    let card = rule_based_compress(&s);
+    assert!(
+        card.next_step.contains("reconnect.rs:47"),
+        "next step should point at the cursor, got: {}",
+        card.next_step
+    );
+
+    // The anchor must survive into the card for the editor ghost to use
+    let signals: serde_json::Value = serde_json::from_str(&card.signals_json).unwrap();
+    assert_eq!(
+        signals["editor"]["cursor"]["file"],
+        "/tmp/corpus/anchored/src/reconnect.rs"
+    );
+    assert_eq!(signals["editor"]["cursor"]["line"], 47);
+}
+
+#[test]
 fn empty_signals_still_produce_a_safe_card() {
     // A project with no git, no terminal, no editor: the card must not
     // panic and must not fabricate specifics it cannot know

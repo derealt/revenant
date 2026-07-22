@@ -18,6 +18,13 @@ import * as fs from 'fs';
 
 // ─── Types ─────────────────────────────────────────────────────────
 
+interface GhostAnchor {
+  /** Absolute path of the file the cursor was in at departure */
+  file: string;
+  /** 1-based line number */
+  line: number;
+}
+
 interface ContextCard {
   id: string;
   project_dir: string;
@@ -25,6 +32,8 @@ interface ContextCard {
   summary: string;
   next_step: string;
   ttl_seconds: number;
+  /** Where your head was: the resume point captured at departure */
+  anchor?: GhostAnchor | null;
 }
 
 interface DaemonMessage {
@@ -40,6 +49,7 @@ let ghostTimer: NodeJS.Timeout | undefined;
 let socketServer: net.Server | undefined;
 let activityTracker: ActivityTracker | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
+let stateReportTimer: NodeJS.Timeout | undefined;
 
 // ─── Activation ────────────────────────────────────────────────────
 
@@ -64,7 +74,8 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('revenant.showGhost', showGhostCommand),
     vscode.commands.registerCommand('revenant.clearGhost', clearAllGhosts),
-    vscode.commands.registerCommand('revenant.history', showHistory)
+    vscode.commands.registerCommand('revenant.history', showHistory),
+    vscode.commands.registerCommand('revenant.resume', resumeAtAnchor)
   );
 
   // Start listening for daemon messages
@@ -86,6 +97,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.window.onDidChangeTextEditorSelection(() => {
       activityTracker?.recordActivity();
+      // The cursor position IS the resume point: keep the daemon's view
+      // of it fresh, debounced so typing doesn't hammer the disk
+      scheduleStateReport();
     })
   );
 
@@ -214,6 +228,21 @@ function injectGhost(card: ContextCard): void {
   renderGhost(card);
   updateStatusBar(card);
 
+  // The north star: offer to put the cursor back where your head was
+  if (card.anchor && fs.existsSync(card.anchor.file)) {
+    const anchorName = path.basename(card.anchor.file);
+    vscode.window
+      .showInformationMessage(
+        `REVENANT: ${card.summary}`,
+        `Resume at ${anchorName}:${card.anchor.line}`
+      )
+      .then((choice) => {
+        if (choice) {
+          resumeAtAnchor();
+        }
+      });
+  }
+
   // Set self-destruct timer
   if (ghostTimer) {
     clearTimeout(ghostTimer);
@@ -221,6 +250,37 @@ function injectGhost(card: ContextCard): void {
   ghostTimer = setTimeout(() => {
     clearAllGhosts();
   }, card.ttl_seconds * 1000);
+}
+
+/**
+ * Open the anchored file, restore the cursor to the departure line,
+ * and center it. One action from "where was I" to "back in it".
+ */
+async function resumeAtAnchor(): Promise<void> {
+  const anchor = activeGhostCard?.anchor;
+  if (!anchor) {
+    vscode.window.showInformationMessage(
+      'REVENANT: No resume point on the current ghost.'
+    );
+    return;
+  }
+  if (!fs.existsSync(anchor.file)) {
+    vscode.window.showWarningMessage(
+      `REVENANT: Resume point ${anchor.file} no longer exists.`
+    );
+    return;
+  }
+
+  const doc = await vscode.workspace.openTextDocument(anchor.file);
+  const editor = await vscode.window.showTextDocument(doc);
+  // Clamp: the file may have shrunk since departure
+  const line = Math.min(Math.max(anchor.line - 1, 0), doc.lineCount - 1);
+  const pos = new vscode.Position(line, 0);
+  editor.selection = new vscode.Selection(pos, pos);
+  editor.revealRange(
+    new vscode.Range(pos, pos),
+    vscode.TextEditorRevealType.InCenter
+  );
 }
 
 // ─── Rendering ─────────────────────────────────────────────────────
@@ -244,8 +304,7 @@ function renderGhost(card: ContextCard): void {
     ghostText += ` | Next: ${card.next_step}`;
   }
 
-  // Create decoration type with inline "after" content
-  // This renders AFTER the first line of the file - purely visual
+  // Create decoration type with inline "after" content - purely visual
   ghostDecorationType = vscode.window.createTextEditorDecorationType({
     isWholeLine: true,
     after: {
@@ -262,8 +321,16 @@ function renderGhost(card: ContextCard): void {
     overviewRulerLane: vscode.OverviewRulerLane.Right,
   });
 
-  // Apply to line 0 (top of file)
-  const range = new vscode.Range(0, 0, 0, 0);
+  // Anchor the ghost at the exact line you left, when this editor is
+  // showing that file; otherwise it floats at the top of the file
+  let line = 0;
+  if (card.anchor && editor.document.uri.fsPath === card.anchor.file) {
+    line = Math.min(
+      Math.max(card.anchor.line - 1, 0),
+      editor.document.lineCount - 1
+    );
+  }
+  const range = new vscode.Range(line, 0, line, 0);
   editor.setDecorations(ghostDecorationType, [range]);
 }
 
@@ -272,13 +339,17 @@ function updateStatusBar(card: ContextCard | undefined): void {
 
   if (card) {
     statusBarItem.text = '$(eye) REVENANT';
-    statusBarItem.tooltip = `Ghost active: ${card.summary}`;
+    statusBarItem.tooltip = card.anchor
+      ? `Ghost active: ${card.summary} (click to resume at ${path.basename(card.anchor.file)}:${card.anchor.line})`
+      : `Ghost active: ${card.summary}`;
+    statusBarItem.command = card.anchor ? 'revenant.resume' : 'revenant.history';
     statusBarItem.backgroundColor = new vscode.ThemeColor(
       'statusBarItem.warningBackground'
     );
   } else {
     statusBarItem.text = '$(eye-closed)';
     statusBarItem.tooltip = 'REVENANT - no active ghost';
+    statusBarItem.command = 'revenant.history';
     statusBarItem.backgroundColor = undefined;
   }
 }
@@ -341,6 +412,14 @@ class ActivityTracker {
 
 // ─── Editor State Reporting ────────────────────────────────────────
 
+/** Debounced reportEditorState for high-frequency events (cursor moves) */
+function scheduleStateReport(): void {
+  if (stateReportTimer) {
+    clearTimeout(stateReportTimer);
+  }
+  stateReportTimer = setTimeout(() => reportEditorState(), 1500);
+}
+
 function reportEditorState(): void {
   // Write current editor state to a file the daemon reads
   const stateDir = path.join(os.homedir(), '.revenant', 'vscode-state');
@@ -354,12 +433,20 @@ function reportEditorState(): void {
     .map((editor) => editor.document.uri.fsPath)
     .filter((p) => !p.startsWith('extension-output'));
 
-  const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath;
+  const activeEditor = vscode.window.activeTextEditor;
+  const activeFile =
+    activeEditor && activeEditor.document.uri.scheme === 'file'
+      ? activeEditor.document.uri.fsPath
+      : undefined;
+  // 1-based, so the daemon and the card speak human line numbers
+  const activeLine =
+    activeFile && activeEditor ? activeEditor.selection.active.line + 1 : null;
 
   const state = {
     projectDir,
     openFiles,
     activeFile: activeFile || null,
+    activeLine,
     timestamp: Date.now(),
   };
 

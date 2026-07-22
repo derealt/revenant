@@ -1203,13 +1203,22 @@ fn cmd_test() -> Result<()> {
     std::fs::write(rev_dir.join("motd.json"), serde_json::to_string_pretty(&meta)?)?;
     println!("\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m terminal ghost (motd)");
 
-    // Dispatch to VS Code ghost via Unix socket
+    // Dispatch to VS Code ghost via Unix socket, with the real captured
+    // resume point when the extension has reported one for this project
     let vscode_sock = rev_dir.join("vscode.sock");
-    dispatch_socket_ghost(&vscode_sock, "vscode", &card_id, &cwd, &project_name, &summary, next_step)?;
+    let anchor = editor_anchor_for(&cwd);
+    if let Some(ref a) = anchor {
+        println!(
+            "\x1b[2m\u{2502}\x1b[0m \x1b[32m+\x1b[0m resume anchor: {}:{}",
+            a["file"].as_str().unwrap_or("?"),
+            a["line"]
+        );
+    }
+    dispatch_socket_ghost(&vscode_sock, "vscode", &card_id, &cwd, &project_name, &summary, next_step, anchor.as_ref())?;
 
     // Dispatch to Slack ghost via Unix socket
     let slack_sock = rev_dir.join("slack.sock");
-    dispatch_socket_ghost(&slack_sock, "slack", &card_id, &cwd, &project_name, &summary, next_step)?;
+    dispatch_socket_ghost(&slack_sock, "slack", &card_id, &cwd, &project_name, &summary, next_step, None)?;
 
     // Dispatch to Obsidian ghost (write state file)
     let card_json = serde_json::json!({
@@ -1245,6 +1254,26 @@ fn cmd_test() -> Result<()> {
     Ok(())
 }
 
+/// The editor extension's captured resume point for a project, if any:
+/// reads ~/.revenant/vscode-state/<hash>.json for activeFile + activeLine
+fn editor_anchor_for(project_dir: &str) -> Option<serde_json::Value> {
+    // FNV-1a, matching the extension and the daemon
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in project_dir.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let state_file = revenant_dir()
+        .join("vscode-state")
+        .join(format!("{hash:016x}.json"));
+
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(state_file).ok()?).ok()?;
+    let file = state.get("activeFile")?.as_str()?;
+    let line = state.get("activeLine")?.as_u64().filter(|l| *l > 0)?;
+    Some(serde_json::json!({ "file": file, "line": line }))
+}
+
 /// Send a context card to a ghost channel via Unix socket (shared by vscode + slack test dispatch)
 fn dispatch_socket_ghost(
     sock_path: &Path,
@@ -1254,6 +1283,7 @@ fn dispatch_socket_ghost(
     project_name: &str,
     summary: &str,
     next_step: &str,
+    anchor: Option<&serde_json::Value>,
 ) -> Result<()> {
     if sock_path.exists() {
         let msg = serde_json::json!({
@@ -1265,6 +1295,7 @@ fn dispatch_socket_ghost(
                 "summary": summary,
                 "next_step": next_step,
                 "ttl_seconds": 300,
+                "anchor": anchor,
             }
         });
         match std::os::unix::net::UnixStream::connect(sock_path) {

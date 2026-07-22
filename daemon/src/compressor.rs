@@ -1090,8 +1090,17 @@ fn predict_next_step(state: &WorkingState) -> String {
         }
     }
 
-    // Rule 12: Active file fallback
+    // Rule 12: Cursor anchor - the sharpest fallback we have
     if let Some(ref ed) = state.editor {
+        if let Some(ref cursor) = ed.cursor {
+            let name = std::path::Path::new(&cursor.file)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| cursor.file.clone());
+            return format!("Pick up at {}:{} where your cursor was.", name, cursor.line);
+        }
+
+        // Rule 13: Active file fallback
         if let Some(ref active) = ed.active_file {
             let desc = describe_path(active);
             return format!("Continue from {}.", desc.short_name);

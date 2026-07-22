@@ -18,6 +18,20 @@ pub struct EditorState {
     pub active_file: Option<String>,
     /// Language/filetype of the active file
     pub active_language: Option<String>,
+    /// The resume point: file + line the cursor was on, as reported by
+    /// the editor extension. This is what "resume where you left off"
+    /// jumps back to.
+    #[serde(default)]
+    pub cursor: Option<CursorAnchor>,
+}
+
+/// Where the cursor was at departure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorAnchor {
+    /// Absolute path
+    pub file: String,
+    /// 1-based line number
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,25 +63,41 @@ pub fn capture(project_dir: &str, config: &EditorSignalConfig) -> Result<EditorS
     open_files.truncate(20);
 
     // Try to read VS Code workspace state if available
+    let mut cursor = None;
     let vscode_state_dir = crate::expand_path(&config.vscode_state_dir);
     if vscode_state_dir.exists() {
-        if let Ok(vscode_files) = read_vscode_state(&vscode_state_dir, project_dir) {
+        if let Ok(vscode_state) = read_vscode_state(&vscode_state_dir, project_dir) {
             // Merge VS Code state: files from VS Code that we didn't already find
-            for vf in vscode_files {
+            for vf in vscode_state.open_files {
                 if !open_files.iter().any(|f| f.absolute_path == vf.absolute_path) {
                     open_files.push(vf);
                 }
             }
+            cursor = vscode_state.cursor;
         }
     }
 
-    let active_file = open_files.first().map(|f| f.path.clone());
-    let active_language = open_files.first().and_then(|f| f.language.clone());
+    // Prefer the editor's actual active file over the mtime guess
+    let active_file = cursor
+        .as_ref()
+        .map(|c| {
+            Path::new(&c.file)
+                .strip_prefix(project_dir)
+                .unwrap_or(Path::new(&c.file))
+                .to_string_lossy()
+                .to_string()
+        })
+        .or_else(|| open_files.first().map(|f| f.path.clone()));
+    let active_language = cursor
+        .as_ref()
+        .and_then(|c| detect_language(Path::new(&c.file)))
+        .or_else(|| open_files.first().and_then(|f| f.language.clone()));
 
     Ok(EditorState {
         open_files,
         active_file,
         active_language,
+        cursor,
     })
 }
 
@@ -124,16 +154,25 @@ fn find_recent_files(project_dir: &Path, threshold: SystemTime) -> Result<Vec<Op
     Ok(files)
 }
 
-/// Try to read VS Code's persisted workspace state
-fn read_vscode_state(state_dir: &Path, project_dir: &str) -> Result<Vec<OpenFile>> {
-    // VS Code extension writes a JSON file per project:
-    // ~/.revenant/vscode-state/<hash>.json
-    // containing { "openFiles": ["path1", "path2"], "activeFile": "path" }
+/// What the editor extension's state file yields
+struct VscodeState {
+    open_files: Vec<OpenFile>,
+    cursor: Option<CursorAnchor>,
+}
+
+/// Read the editor extension's persisted workspace state
+fn read_vscode_state(state_dir: &Path, project_dir: &str) -> Result<VscodeState> {
+    // The extension writes a JSON file per project:
+    // ~/.revenant/vscode-state/<hash>.json containing
+    // { "openFiles": [...], "activeFile": "path", "activeLine": 47, "timestamp": ms }
     let hash = simple_hash(project_dir);
     let state_file = state_dir.join(format!("{hash}.json"));
 
     if !state_file.exists() {
-        return Ok(vec![]);
+        return Ok(VscodeState {
+            open_files: vec![],
+            cursor: None,
+        });
     }
 
     let contents = std::fs::read_to_string(&state_file)?;
@@ -160,7 +199,22 @@ fn read_vscode_state(state_dir: &Path, project_dir: &str) -> Result<Vec<OpenFile
         }
     }
 
-    Ok(files)
+    // The resume point: active file + 1-based cursor line
+    let cursor = match (
+        state.get("activeFile").and_then(|v| v.as_str()),
+        state.get("activeLine").and_then(|v| v.as_u64()),
+    ) {
+        (Some(file), Some(line)) if line > 0 => Some(CursorAnchor {
+            file: file.to_string(),
+            line: line as u32,
+        }),
+        _ => None,
+    };
+
+    Ok(VscodeState {
+        open_files: files,
+        cursor,
+    })
 }
 
 fn simple_hash(s: &str) -> String {
@@ -171,6 +225,62 @@ fn simple_hash(s: &str) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_state(dir: &Path, project: &str, json: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(format!("{}.json", simple_hash(project))), json).unwrap();
+    }
+
+    #[test]
+    fn vscode_state_yields_cursor_anchor() {
+        let dir = std::env::temp_dir().join("revenant-test-vscode-state");
+        let _ = std::fs::remove_dir_all(&dir);
+        let project = "/tmp/anchor-project";
+        write_state(
+            &dir,
+            project,
+            r#"{"projectDir":"/tmp/anchor-project",
+                "openFiles":["/tmp/anchor-project/src/a.rs"],
+                "activeFile":"/tmp/anchor-project/src/a.rs",
+                "activeLine":47,
+                "timestamp":1711234567890}"#,
+        );
+
+        let state = read_vscode_state(&dir, project).unwrap();
+        let cursor = state.cursor.expect("cursor anchor must be parsed");
+        assert_eq!(cursor.file, "/tmp/anchor-project/src/a.rs");
+        assert_eq!(cursor.line, 47);
+        assert_eq!(state.open_files.len(), 1);
+        assert_eq!(state.open_files[0].path, "src/a.rs");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vscode_state_without_line_has_no_anchor() {
+        let dir = std::env::temp_dir().join("revenant-test-vscode-state-noline");
+        let _ = std::fs::remove_dir_all(&dir);
+        let project = "/tmp/no-line-project";
+        // Old extension versions wrote no activeLine: must not invent one
+        write_state(
+            &dir,
+            project,
+            r#"{"projectDir":"/tmp/no-line-project",
+                "openFiles":[],
+                "activeFile":"/tmp/no-line-project/main.go",
+                "timestamp":1711234567890}"#,
+        );
+
+        let state = read_vscode_state(&dir, project).unwrap();
+        assert!(state.cursor.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 fn detect_language(path: &Path) -> Option<String> {

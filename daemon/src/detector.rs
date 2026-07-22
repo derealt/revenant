@@ -84,7 +84,7 @@ impl SwitchDetector {
         } else {
             None
         };
-
+        
         // Update tracker for this project
         let tracker = projects
             .entry(project_dir.to_string())
