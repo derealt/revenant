@@ -150,7 +150,13 @@ impl SwitchDetector {
 
         let was_absent =
             first_sighting || now.duration_since(tracker.last_activity) > self.absence_threshold;
-        tracker.last_activity = now;
+
+        // Only a summoning shell resets the absence clock. A silent
+        // mid-flow tab must not push the clock forward, or occasional
+        // tab-opens could suppress a deserved ghost indefinitely.
+        if switched_from.is_some() || was_absent {
+            tracker.last_activity = now;
+        }
         *active = Some(project_dir.to_string());
 
         if switched_from.is_some() {
