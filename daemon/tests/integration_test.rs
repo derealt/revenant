@@ -1,10 +1,10 @@
 //! REVENANT Integration Tests
 //!
-//! These tests simulate context switch scenarios end-to-end:
-//! 1. Create a mock project with git state
-//! 2. Trigger a departure (snapshot + compress + store)
-//! 3. Trigger a return (load card + verify ghost)
-//! 4. Verify ghost TTL expiry
+//! These tests drive the REAL daemon code end-to-end through the library
+//! target: fixture git repo -> signals::git::capture -> rule_based_compress
+//! -> ContextStore roundtrip -> TerminalGhost motd render, plus the
+//! SwitchDetector state machine. No logic is re-implemented in the tests;
+//! if the daemon breaks, these break.
 //!
 //! Run with: cargo test --test integration_test
 
@@ -12,54 +12,39 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Test helper: create a temporary git project
+use revenant::compressor::rule_based_compress;
+use revenant::config::{RevenantConfig, TerminalGhostConfig, TerminalSignalConfig};
+use revenant::detector::{SwitchDetector, SwitchKind};
+use revenant::ghost::terminal::TerminalGhost;
+use revenant::signals::{git, terminal};
+use revenant::snapshot::{SnapshotAggregator, WorkingState};
+use revenant::store::ContextStore;
+
+/// Test helper: create a temporary git project on branch feature/auth
+/// with one commit, one staged file, and one modified file.
 fn setup_test_project(name: &str) -> PathBuf {
     let tmp = std::env::temp_dir().join(format!("revenant-test-{name}"));
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
 
-    // Initialize git
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&tmp)
-        .output()
-        .unwrap();
+    let run = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+    };
 
-    Command::new("git")
-        .args(["config", "user.email", "test@revenant.dev"])
-        .current_dir(&tmp)
-        .output()
-        .unwrap();
+    run(&["init"]);
+    run(&["config", "user.email", "test@revenant.dev"]);
+    run(&["config", "user.name", "Test"]);
 
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&tmp)
-        .output()
-        .unwrap();
-
-    // Create some source files
     fs::write(tmp.join("main.rs"), "fn main() { println!(\"hello\"); }\n").unwrap();
     fs::write(tmp.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }\n").unwrap();
 
-    // Initial commit
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&tmp)
-        .output()
-        .unwrap();
-
-    Command::new("git")
-        .args(["commit", "-m", "initial commit"])
-        .current_dir(&tmp)
-        .output()
-        .unwrap();
-
-    // Create a branch and modify a file
-    Command::new("git")
-        .args(["checkout", "-b", "feature/auth"])
-        .current_dir(&tmp)
-        .output()
-        .unwrap();
+    run(&["add", "."]);
+    run(&["commit", "-m", "fix: resolve reconnect race in auth flow"]);
+    run(&["checkout", "-b", "feature/auth"]);
 
     fs::write(
         tmp.join("auth.rs"),
@@ -80,280 +65,362 @@ fn setup_test_project(name: &str) -> PathBuf {
     )
     .unwrap();
 
-    Command::new("git")
-        .args(["add", "auth.rs"])
-        .current_dir(&tmp)
-        .output()
-        .unwrap();
+    run(&["add", "auth.rs"]);
 
     tmp
 }
 
-/// Test helper: clean up test project
 fn cleanup_test_project(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
 
+/// Capture a WorkingState for a fixture project using the real git signal,
+/// with terminal/editor/clipboard/browser signals absent.
+fn working_state_for(project: &Path) -> WorkingState {
+    let dir = project.to_str().unwrap().to_string();
+    let name = project.file_name().unwrap().to_string_lossy().to_string();
+    WorkingState {
+        project_dir: dir.clone(),
+        project_name: name,
+        timestamp: chrono::Utc::now(),
+        git: Some(git::capture(&dir).expect("git capture should succeed on fixture")),
+        editor: None,
+        terminal: None,
+        clipboard: None,
+        browser_tabs: vec![],
+        recent_file_events: vec![],
+    }
+}
+
 #[test]
-fn test_git_signal_capture() {
+fn git_signal_captures_branch_status_and_commits() {
     let project = setup_test_project("git-signal");
+    let state = git::capture(project.to_str().unwrap()).unwrap();
 
-    // The git module should detect:
-    // - Branch: feature/auth
-    // - 1 staged file (auth.rs)
-    // - 1 modified file (main.rs)
-    let output = Command::new("git")
-        .args(["-C", project.to_str().unwrap(), "branch", "--show-current"])
-        .output()
-        .unwrap();
-
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    assert_eq!(branch, "feature/auth");
-
-    let output = Command::new("git")
-        .args(["-C", project.to_str().unwrap(), "status", "--porcelain"])
-        .output()
-        .unwrap();
-
-    let status = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(status.contains("auth.rs"), "should have staged auth.rs");
-    assert!(status.contains("main.rs"), "should have modified main.rs");
+    assert_eq!(state.branch, "feature/auth");
+    assert_eq!(state.staged, 1, "auth.rs should be staged");
+    assert_eq!(state.modified, 1, "main.rs should be modified");
+    assert!(
+        state.changed_files.iter().any(|f| f.path == "auth.rs"),
+        "changed files should include auth.rs, got {:?}",
+        state.changed_files
+    );
+    assert_eq!(state.recent_commits.len(), 1);
+    assert_eq!(
+        state.recent_commits[0].message,
+        "fix: resolve reconnect race in auth flow"
+    );
+    assert!(!state.diff_stat.is_empty(), "diff stat should be populated");
 
     cleanup_test_project(&project);
 }
 
 #[test]
-fn test_zsh_history_parsing() {
+fn git_capture_fails_outside_a_repo() {
+    let tmp = std::env::temp_dir().join("revenant-test-not-a-repo");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+
+    assert!(git::capture(tmp.to_str().unwrap()).is_err());
+
+    cleanup_test_project(&tmp);
+}
+
+#[test]
+fn terminal_signal_parses_zsh_history_newest_first() {
     let tmp = std::env::temp_dir().join("revenant-test-zsh-history");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
 
+    // File name must contain "zsh_history" for the parser to use zsh format
     let history_file = tmp.join("zsh_history");
-    let history_content = concat!(
-        ": 1711234560:0;cd ~/projects/revenant\n",
-        ": 1711234561:0;cargo build\n",
-        ": 1711234562:0;cargo test test_snapshot\n",
-        ": 1711234563:0;git status\n",
-        ": 1711234564:0;git diff src/compressor.rs\n",
+    fs::write(
+        &history_file,
+        concat!(
+            ": 1711234560:0;cd ~/projects/revenant\n",
+            ": 1711234561:0;cargo build\n",
+            ": 1711234562:0;cargo test test_snapshot\n",
+            ": 1711234563:0;git status\n",
+            ": 1711234564:0;git diff src/compressor.rs\n",
+        ),
+    )
+    .unwrap();
+
+    let config = TerminalSignalConfig {
+        history_files: vec![history_file.to_str().unwrap().to_string()],
+        recent_command_count: 3,
+    };
+    let state = terminal::capture(&config).unwrap();
+
+    assert_eq!(state.recent_commands.len(), 3, "should honor recent_command_count");
+    assert_eq!(
+        state.recent_commands[0].command, "git diff src/compressor.rs",
+        "newest command must come first"
     );
-    fs::write(&history_file, history_content).unwrap();
-
-    // Verify the file can be parsed
-    let content = fs::read_to_string(&history_file).unwrap();
-    let lines: Vec<&str> = content.lines().collect();
-    assert_eq!(lines.len(), 5);
-
-    // Verify zsh format parsing
-    for line in &lines {
-        assert!(line.starts_with(": "), "each line should start with ': '");
-        assert!(line.contains(';'), "each line should contain a semicolon separator");
-    }
-
-    // Extract commands
-    let commands: Vec<&str> = lines
-        .iter()
-        .filter_map(|line| line.split(';').nth(1))
-        .collect();
-
-    assert_eq!(commands.len(), 5);
-    assert_eq!(commands[0], "cd ~/projects/revenant");
-    assert_eq!(commands[2], "cargo test test_snapshot");
+    assert_eq!(state.recent_commands[0].timestamp, Some(1711234564));
 
     cleanup_test_project(&tmp);
 }
 
 #[test]
-fn test_rule_based_compression() {
-    // Simulate the compression logic
-    let branch = "feature/auth";
-    let changed_files = vec!["auth.rs", "main.rs"];
-    let recent_commands = vec!["cargo build", "cargo test", "git diff"];
-    let last_commit = "add authentication module";
+fn terminal_signal_dedupes_consecutive_commands() {
+    let tmp = std::env::temp_dir().join("revenant-test-zsh-dedup");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
 
-    // Build summary fragments (mirrors compressor.rs logic)
-    let mut fragments: Vec<String> = Vec::new();
+    let history_file = tmp.join("zsh_history");
+    fs::write(
+        &history_file,
+        concat!(
+            ": 1711234560:0;cargo test\n",
+            ": 1711234561:0;cargo test\n",
+            ": 1711234562:0;cargo test\n",
+            ": 1711234563:0;git status\n",
+        ),
+    )
+    .unwrap();
 
-    fragments.push(format!("on branch `{branch}`"));
-    fragments.push(format!("editing {}", changed_files.join(", ")));
-    fragments.push(format!("last commit: \"{last_commit}\""));
+    let config = TerminalSignalConfig {
+        history_files: vec![history_file.to_str().unwrap().to_string()],
+        recent_command_count: 10,
+    };
+    let state = terminal::capture(&config).unwrap();
 
-    let interesting: Vec<&&str> = recent_commands
+    let test_runs = state
+        .recent_commands
         .iter()
-        .filter(|c| {
-            let boring = ["ls", "cd", "pwd", "clear"];
-            let first_word = c.split_whitespace().next().unwrap_or("");
-            !boring.contains(&first_word)
-        })
-        .collect();
+        .filter(|c| c.command == "cargo test")
+        .count();
+    assert_eq!(test_runs, 1, "consecutive identical commands should collapse to one");
 
-    fragments.push(format!(
-        "recently ran: {}",
-        interesting
-            .iter()
-            .map(|c| format!("`{c}`"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    ));
-
-    let summary = format!("You were working in revenant: {}", fragments.join(". "));
-
-    assert!(summary.contains("feature/auth"));
-    assert!(summary.contains("auth.rs"));
-    assert!(summary.contains("cargo test"));
-    assert!(summary.contains("authentication module"));
-    assert!(!summary.is_empty());
+    cleanup_test_project(&tmp);
 }
 
 #[test]
-fn test_sqlite_store_roundtrip() {
+fn rule_based_compression_produces_specific_second_person_card() {
+    let project = setup_test_project("compress");
+    let state = working_state_for(&project);
+    let card = rule_based_compress(&state);
+
+    assert!(!card.id.is_empty());
+    assert_eq!(card.project_dir, state.project_dir);
+    assert!(!card.summary.is_empty());
+    assert!(
+        card.summary.starts_with("You") || card.summary.contains("you"),
+        "cards are written to future-you, got: {}",
+        card.summary
+    );
+    // The fixture's signals are a fix-flavored commit on a feature branch
+    // touching auth files. A specific card must surface at least one of
+    // those concrete facts; a generic card surfaces none.
+    let s = card.summary.to_lowercase();
+    assert!(
+        s.contains("auth") || s.contains("reconnect") || s.contains("fix"),
+        "summary must reference the actual work, got: {}",
+        card.summary
+    );
+    assert!(!card.next_step.is_empty(), "card must propose a next step");
+    assert!(card.ttl_seconds > 0);
+
+    cleanup_test_project(&project);
+}
+
+#[test]
+fn store_roundtrips_real_cards() {
     let tmp = std::env::temp_dir().join("revenant-test-db");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
 
-    let db_path = tmp.join("test.db");
+    let project = setup_test_project("store");
+    let state = working_state_for(&project);
+    let card = rule_based_compress(&state);
 
-    // Open database
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS context_cards (
-            id TEXT PRIMARY KEY,
-            project_dir TEXT NOT NULL,
-            project_name TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            next_step TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            signals_json TEXT NOT NULL DEFAULT '{}',
-            ttl_seconds INTEGER NOT NULL DEFAULT 300
-        );",
-    )
-    .unwrap();
+    let store = ContextStore::open(&tmp.join("test.db")).unwrap();
+    store.migrate().unwrap();
+    store.save_card(&card).unwrap();
 
-    // Insert a card
-    conn.execute(
-        "INSERT INTO context_cards (id, project_dir, project_name, summary, next_step, created_at, ttl_seconds)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![
-            "test-card-001",
-            "/home/user/projects/revenant",
-            "revenant",
-            "You were debugging the file watcher debounce logic. The threshold was too aggressive, causing missed events.",
-            "Lower the debounce interval to 100ms and re-run test_rapid_events",
-            "2024-03-23T10:30:00Z",
-            300,
-        ],
-    )
-    .unwrap();
+    let loaded = store
+        .latest_card(&card.project_dir)
+        .unwrap()
+        .expect("saved card must be retrievable");
+    assert_eq!(loaded.id, card.id);
+    assert_eq!(loaded.summary, card.summary);
+    assert_eq!(loaded.next_step, card.next_step);
+    assert_eq!(loaded.ttl_seconds, card.ttl_seconds);
 
-    // Read it back
-    let summary: String = conn
-        .query_row(
-            "SELECT summary FROM context_cards WHERE project_dir = ?1 ORDER BY created_at DESC LIMIT 1",
-            rusqlite::params!["/home/user/projects/revenant"],
-            |row| row.get(0),
-        )
+    // Unknown project: no card
+    assert!(store.latest_card("/nonexistent/project").unwrap().is_none());
+
+    // Recent-cards query sees it too
+    let recent = store
+        .cards_since(chrono::Utc::now() - chrono::Duration::hours(1), 10)
         .unwrap();
+    assert!(recent.iter().any(|c| c.id == card.id));
 
-    assert!(summary.contains("file watcher debounce"));
-
-    let next: String = conn
-        .query_row(
-            "SELECT next_step FROM context_cards WHERE id = ?1",
-            rusqlite::params!["test-card-001"],
-            |row| row.get(0),
-        )
-        .unwrap();
-
-    assert!(next.contains("debounce interval"));
-
+    cleanup_test_project(&project);
     cleanup_test_project(&tmp);
 }
 
 #[test]
-fn test_motd_generation() {
-    // Verify the terminal ghost MOTD format
-    let project = "revenant";
-    let summary = "You were debugging the context switch detector. Branch changes weren't triggering snapshots.";
-    let next_step = "Add branch comparison to the polling loop in detector.rs";
-    let ttl_minutes = 5;
+fn store_skips_near_duplicate_cards() {
+    let tmp = std::env::temp_dir().join("revenant-test-db-dedup");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
 
-    // Build MOTD with premium format (double-line borders, intent coloring)
-    let dim = "\x1b[2m";
-    let reset = "\x1b[0m";
-    let white = "\x1b[97m";
-    let gold = "\x1b[38;5;178m";
+    let project = setup_test_project("store-dedup");
+    let state = working_state_for(&project);
+    let card = rule_based_compress(&state);
 
-    let mut motd = String::new();
-    motd.push_str(&format!("{dim}\u{2554}\u{2550}\u{2550}{reset}"));
-    motd.push_str(&format!(" REVENANT \u{2502} {project} \u{2502} "));
-    motd.push_str(&format!("{reset}{dim} \u{2550}\u{2550}\u{2557}{reset}\n"));
-    motd.push_str(&format!("{dim}\u{2551}{reset} {white}{summary}{reset}\n"));
-    motd.push_str(&format!("{dim}\u{2551}{reset} {gold}\u{2192} {next_step}{reset}\n"));
-    motd.push_str(&format!("{dim}\u{255a}\u{2550}\u{2550} ghost fades in {ttl_minutes}min of activity \u{2550}\u{2550}\u{255d}{reset}\n"));
+    let store = ContextStore::open(&tmp.join("test.db")).unwrap();
+    store.migrate().unwrap();
+    store.save_card(&card).unwrap();
 
-    // Verify ANSI codes and content are present
-    assert!(motd.contains("\x1b[2m")); // dim
-    assert!(motd.contains("\x1b[97m")); // white
-    assert!(motd.contains("\x1b[38;5;178m")); // gold
+    // Saving an identical card again must not grow the store
+    let mut dup = card.clone();
+    dup.id = "different-id".to_string();
+    store.save_card(&dup).unwrap();
+
+    assert_eq!(
+        store.total_cards().unwrap(),
+        1,
+        "near-duplicate card should be skipped"
+    );
+
+    cleanup_test_project(&project);
+    cleanup_test_project(&tmp);
+}
+
+#[tokio::test]
+async fn full_pipeline_snapshot_compress_store_restore() {
+    let tmp = std::env::temp_dir().join("revenant-test-pipeline");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+
+    let project = setup_test_project("pipeline");
+
+    // Departure: real aggregator (git signal only, so the test is hermetic:
+    // no dependence on this machine's shell history or editor state)
+    let mut config = RevenantConfig::default();
+    config.signals.terminal_enabled = false;
+    config.signals.editor_enabled = false;
+
+    let aggregator = SnapshotAggregator::new(&config);
+    let state = aggregator.capture(project.to_str().unwrap()).await.unwrap();
+    assert_eq!(state.branch(), Some("feature/auth"));
+
+    let card = rule_based_compress(&state);
+
+    let store = ContextStore::open(&tmp.join("pipeline.db")).unwrap();
+    store.migrate().unwrap();
+    store.save_card(&card).unwrap();
+
+    // Return: load the card and render the real terminal ghost
+    let restored = store
+        .latest_card(project.to_str().unwrap())
+        .unwrap()
+        .expect("card must be restorable on return");
+
+    let ghost_config = TerminalGhostConfig {
+        motd_file: tmp.join("motd").to_str().unwrap().to_string(),
+    };
+    let ghost = TerminalGhost::new(&ghost_config).unwrap();
+    ghost.inject(&restored).await.unwrap();
+
+    let motd = fs::read_to_string(tmp.join("motd")).unwrap();
     assert!(motd.contains("REVENANT"));
-    assert!(motd.contains("Branch changes"));
-    assert!(motd.contains("detector.rs"));
+    assert!(motd.contains(&restored.project_name));
+    assert!(motd.contains(&restored.summary));
+    assert!(motd.contains("ghost fades"));
+
+    // Machine-readable metadata for the shell scripts
+    let meta: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(tmp.join("motd.json")).unwrap()).unwrap();
+    assert_eq!(meta["card_id"], serde_json::json!(restored.id));
+
+    // Clear removes both files
+    ghost.clear().await.unwrap();
+    assert!(!tmp.join("motd").exists());
+    assert!(!tmp.join("motd.json").exists());
+
+    cleanup_test_project(&project);
+    cleanup_test_project(&tmp);
 }
 
 #[test]
-fn test_context_card_privacy() {
-    // Verify that certain patterns are never captured
-    let sensitive_patterns = [
-        "password",
-        "secret",
-        "api_key",
-        "token",
-        ".env",
-        "credentials",
-    ];
+fn detector_emits_return_on_project_switch() {
+    let detector = SwitchDetector::new(&RevenantConfig::default());
 
-    // The ignore patterns should filter these
-    let ignore_patterns = [
-        "node_modules",
-        ".git",
-        "target",
-        "dist",
-        "__pycache__",
-        ".DS_Store",
-    ];
+    // First activity in a project: no switch
+    assert!(detector.record_activity("/tmp/project-a").is_none());
+    // Continued activity in the same project: no switch
+    assert!(detector.record_activity("/tmp/project-a").is_none());
 
-    // Clipboard is opt-in by default
-    let clipboard_enabled = false;
-    assert!(!clipboard_enabled, "clipboard should be opt-in");
-
-    // Browser signal is opt-in by default
-    let browser_enabled = false;
-    assert!(!browser_enabled, "browser signal should be opt-in");
+    // Hopping to another project: Return carrying the origin
+    let event = detector
+        .record_activity("/tmp/project-b")
+        .expect("project hop must emit a switch event");
+    match event.kind {
+        SwitchKind::Return {
+            project_dir,
+            from_project,
+        } => {
+            assert_eq!(project_dir, "/tmp/project-b");
+            assert_eq!(from_project.as_deref(), Some("/tmp/project-a"));
+        }
+        other => panic!("expected Return, got {other:?}"),
+    }
 }
 
 #[test]
-fn test_ghost_never_modifies_files() {
+fn detector_emits_return_on_branch_change() {
+    let detector = SwitchDetector::new(&RevenantConfig::default());
+    detector.record_activity("/tmp/project-a");
+
+    // First observation just records the branch
+    assert!(detector.check_branch_change("/tmp/project-a", "main").is_none());
+    // Same branch: nothing
+    assert!(detector.check_branch_change("/tmp/project-a", "main").is_none());
+    // Branch switch: Return event
+    let event = detector
+        .check_branch_change("/tmp/project-a", "feature/auth")
+        .expect("branch change must emit a switch event");
+    assert!(matches!(event.kind, SwitchKind::Return { .. }));
+}
+
+#[test]
+fn privacy_defaults_are_opt_in() {
+    // The real defaults, not local booleans: clipboard and browser signal
+    // capture must ship disabled, and noisy dirs must be ignored.
+    let config = RevenantConfig::default();
+    assert!(!config.signals.clipboard, "clipboard capture must be opt-in");
+    assert!(!config.signals.browser, "browser capture must be opt-in");
+    assert!(config.signals.ignore_patterns.iter().any(|p| p == ".git"));
+    assert!(config.signals.ignore_patterns.iter().any(|p| p == "node_modules"));
+}
+
+#[tokio::test]
+async fn ghost_never_modifies_project_files() {
     let project = setup_test_project("no-modify");
     let main_rs = project.join("main.rs");
-
-    // Read the file before ghost injection
     let before = fs::read_to_string(&main_rs).unwrap();
 
-    // Simulate ghost injection (terminal ghost writes to separate motd file)
-    let motd_path = project.join("motd");
-    fs::write(
-        &motd_path,
-        "REVENANT: You were here. This is a ghost annotation.",
-    )
-    .unwrap();
+    // Run the REAL terminal ghost against a card for this project.
+    // The motd lives outside the project tree; the project must be untouched.
+    let state = working_state_for(&project);
+    let card = rule_based_compress(&state);
 
-    // The source file should be UNCHANGED
+    let ghost_dir = std::env::temp_dir().join("revenant-test-no-modify-ghost");
+    let _ = fs::remove_dir_all(&ghost_dir);
+    fs::create_dir_all(&ghost_dir).unwrap();
+    let ghost = TerminalGhost::new(&TerminalGhostConfig {
+        motd_file: ghost_dir.join("motd").to_str().unwrap().to_string(),
+    })
+    .unwrap();
+    ghost.inject(&card).await.unwrap();
+
     let after = fs::read_to_string(&main_rs).unwrap();
     assert_eq!(before, after, "ghost injection must NEVER modify source files");
 
-    // VS Code ghost uses decorations (visual overlay), not file edits
-    // Slack ghost uses ephemeral messages
-    // Browser ghost uses DOM injection on web pages
-    // All are non-destructive by design
-
     cleanup_test_project(&project);
+    cleanup_test_project(&ghost_dir);
 }

@@ -4,31 +4,22 @@
 //! Restores it as ghost annotations when you return.
 //! No UI. No app. Just traces of your previous mind.
 
-mod compressor;
-mod config;
-mod detector;
-mod ghost;
-mod signals;
-mod snapshot;
-mod store;
-mod watcher;
-
 use anyhow::{Context, Result};
 use chrono::Utc;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook_tokio::Signals;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{self, Duration};
 use tokio_stream::StreamExt;
 use tracing::{error, info, warn};
 
-use config::RevenantConfig;
-use detector::{SwitchDetector, SwitchEvent, SwitchKind};
-use ghost::GhostDispatcher;
-use snapshot::SnapshotAggregator;
-use store::ContextStore;
+use revenant::config::{self, RevenantConfig};
+use revenant::detector::{SwitchDetector, SwitchEvent, SwitchKind};
+use revenant::ghost::{self, GhostDispatcher};
+use revenant::snapshot::SnapshotAggregator;
+use revenant::store::ContextStore;
+use revenant::{compressor, expand_path, watcher};
 
 /// Top-level daemon state, shared across async tasks
 struct Daemon {
@@ -290,15 +281,5 @@ async fn main() -> Result<()> {
     info!("revenant resting");
 
     Ok(())
-}
-
-/// Expand ~ to home directory in paths
-pub fn expand_path(path: &str) -> PathBuf {
-    if path.starts_with("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(&path[2..]);
-        }
-    }
-    PathBuf::from(path)
 }
 
