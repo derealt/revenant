@@ -1,19 +1,26 @@
-//! Tiny HTTP server on localhost:7711 - the browser extension's bridge.
+//! Tiny HTTP server on localhost:7711 - the browser extension's bridge
+//! and the shell hook's return signal.
 //!
-//! GET  /ghost   -> the current ghost card as JSON (extension polls this)
-//! POST /tab     -> extension reports the active tab (stored only when
-//!                  `signals.browser = true`; discarded otherwise)
-//! POST /inject  -> set the current ghost card (used by `rvn test`)
-//! POST /clear   -> clear the current ghost card (used by `rvn clear`)
+//! GET  /ghost      -> the current ghost card as JSON (extension polls this)
+//! POST /tab        -> extension reports the active tab (stored only when
+//!                     `signals.browser = true`; discarded otherwise)
+//! POST /inject     -> set the current ghost card (used by `rvn test`)
+//! POST /clear      -> clear the current ghost card (used by `rvn clear`)
+//! POST /shell-open -> a new shell announces itself with its cwd; the
+//!                     daemon decides whether that is a return worth a
+//!                     ghost and answers with rendered MOTD text
 //!
 //! Bound to 127.0.0.1 only. Requests larger than 16KB are rejected.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
+use crate::detector::{SwitchDetector, SwitchEvent, SwitchKind};
 use crate::signals::browser::BrowserTab;
+use crate::store::ContextStore;
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const CLEAR_JSON: &str = r#"{"type":"clear"}"#;
@@ -41,6 +48,18 @@ impl CurrentGhost {
     }
 }
 
+/// Everything the /shell-open endpoint needs to answer a freshly opened
+/// shell: the detector decides whether this is a return, the store
+/// supplies the card, the channel wakes the other ghost channels.
+pub struct ShellBridge {
+    pub detector: Arc<SwitchDetector>,
+    pub store: Arc<ContextStore>,
+    pub switch_tx: tokio::sync::mpsc::Sender<SwitchEvent>,
+    /// The terminal MOTD path: a live MOTD is served to every shell
+    /// that opens inside its window
+    pub motd_path: PathBuf,
+}
+
 /// Holds the current ghost card as JSON string, set by the dispatcher.
 pub struct GhostHttpServer {
     current: Arc<Mutex<CurrentGhost>>,
@@ -49,6 +68,8 @@ pub struct GhostHttpServer {
     /// Banner lifetime cap (config: ghosts.browser.banner_seconds).
     /// The banner goes off after 1 minute by default; users may raise it.
     banner_seconds: u64,
+    /// Present in the daemon; absent in contexts with no store/detector
+    shell: Option<Arc<ShellBridge>>,
 }
 
 /// Cap the card's TTL to the configured banner lifetime and rewrite
@@ -84,7 +105,14 @@ impl GhostHttpServer {
             current: Arc::new(Mutex::new(CurrentGhost::cleared())),
             accept_tab_reports,
             banner_seconds: banner_seconds.max(1),
+            shell: None,
         }
+    }
+
+    /// Enable the /shell-open endpoint
+    pub fn with_shell_bridge(mut self, bridge: ShellBridge) -> Self {
+        self.shell = Some(Arc::new(bridge));
+        self
     }
 
     /// Set the current ghost card (called by dispatcher on Return events)
@@ -120,6 +148,7 @@ impl GhostHttpServer {
         let current = self.current.clone();
         let accept_tab_reports = self.accept_tab_reports;
         let banner_seconds = self.banner_seconds;
+        let shell = self.shell.clone();
 
         loop {
             let (mut stream, _) = match listener.accept().await {
@@ -128,6 +157,7 @@ impl GhostHttpServer {
             };
 
             let current = current.clone();
+            let shell = shell.clone();
 
             tokio::spawn(async move {
                 let request = match read_request(&mut stream).await {
@@ -192,12 +222,91 @@ impl GhostHttpServer {
                         }
                         cors_response("204 No Content", "")
                     }
+                    ("POST", "/shell-open") => match shell {
+                        Some(ref bridge) => {
+                            let cwd = serde_json::from_str::<serde_json::Value>(
+                                request_body(&request),
+                            )
+                            .ok()
+                            .and_then(|v| {
+                                v.get("cwd").and_then(|c| c.as_str()).map(String::from)
+                            });
+                            match cwd {
+                                Some(cwd) => shell_open_response(bridge, &cwd).await,
+                                None => cors_response("400 Bad Request", ""),
+                            }
+                        }
+                        None => cors_response("404 Not Found", ""),
+                    },
                     _ => cors_response("404 Not Found", ""),
                 };
 
                 respond(&mut stream, &response).await;
             });
         }
+    }
+}
+
+/// Answer a freshly opened shell. The shell-open is itself a return
+/// signal: the only one a terminal can emit before any file is saved.
+/// The daemon's own absence rules decide whether it deserves a ghost.
+async fn shell_open_response(bridge: &ShellBridge, cwd: &str) -> String {
+    // A live terminal ghost is served as-is, so every shell that opens
+    // inside its window sees the same MOTD the reaper will soon fade
+    if let Ok(motd) = tokio::fs::read_to_string(&bridge.motd_path).await {
+        return text_response("200 OK", &motd);
+    }
+
+    // Resolve which project this shell belongs to: its own git root,
+    // else wherever the user last was, else the freshest card on record
+    let project = crate::watcher::find_git_root(&PathBuf::from(cwd))
+        .map(|p| p.to_string_lossy().to_string())
+        .or_else(|| bridge.detector.active_project())
+        .or_else(|| {
+            bridge
+                .store
+                .cards_since(chrono::Utc::now() - chrono::Duration::days(7), 1)
+                .ok()
+                .and_then(|cards| cards.into_iter().next())
+                .map(|c| c.project_dir)
+        });
+    let project = match project {
+        Some(p) => p,
+        None => return text_response("204 No Content", ""),
+    };
+
+    let event = match bridge.detector.shell_opened(&project) {
+        Some(e) => e,
+        None => return text_response("204 No Content", ""),
+    };
+
+    // A shell-open landing on a different project banks a departure for
+    // the previous one first, exactly like the watcher's switch path
+    if let SwitchKind::Return {
+        from_project: Some(ref prev),
+        ..
+    } = event.kind
+    {
+        let _ = bridge
+            .switch_tx
+            .send(SwitchEvent {
+                kind: SwitchKind::Departure {
+                    project_dir: prev.clone(),
+                },
+                timestamp: chrono::Utc::now(),
+            })
+            .await;
+    }
+
+    let card = bridge.store.latest_card(&project).ok().flatten();
+
+    // Wake the other channels through the normal event loop
+    info!("shell opened in {project}: treating as return");
+    let _ = bridge.switch_tx.send(event).await;
+
+    match card {
+        Some(card) => text_response("200 OK", &crate::ghost::terminal::render_motd(&card)),
+        None => text_response("204 No Content", ""),
     }
 }
 
@@ -260,6 +369,15 @@ fn request_body(request: &str) -> &str {
         .split_once("\r\n\r\n")
         .map(|(_, body)| body)
         .unwrap_or("")
+}
+
+/// Plain-text response for the shell hook: the body is pre-rendered
+/// ANSI, printed verbatim by the opening shell
+fn text_response(status: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+    )
 }
 
 fn cors_response(status: &str, body: &str) -> String {

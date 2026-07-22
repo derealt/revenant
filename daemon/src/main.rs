@@ -24,7 +24,7 @@ use revenant::{compressor, expand_path, watcher};
 /// Top-level daemon state, shared across async tasks
 struct Daemon {
     config: RevenantConfig,
-    store: ContextStore,
+    store: Arc<ContextStore>,
     aggregator: SnapshotAggregator,
     detector: Arc<SwitchDetector>,
     dispatcher: GhostDispatcher,
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let store = ContextStore::open(&db_path).context("failed to open context store")?;
+    let store = Arc::new(ContextStore::open(&db_path).context("failed to open context store")?);
     store.migrate()?;
     info!("context store ready at {}", db_path.display());
 
@@ -72,20 +72,29 @@ async fn main() -> Result<()> {
 
     let daemon = Arc::new(RwLock::new(Daemon {
         config: config.clone(),
-        store,
+        store: Arc::clone(&store),
         aggregator,
-        detector,
+        detector: Arc::clone(&detector),
         dispatcher,
     }));
 
     // Channel for switch events
     let (switch_tx, mut switch_rx) = mpsc::channel::<SwitchEvent>(32);
 
-    // Spawn ghost HTTP server for browser extension polling and tab reports
-    let ghost_http = Arc::new(ghost::http::GhostHttpServer::new(
-        config.signals.browser,
-        config.ghosts.browser_config.banner_seconds,
-    ));
+    // Spawn ghost HTTP server: browser extension polling, tab reports,
+    // and the shell hook's /shell-open return signal
+    let ghost_http = Arc::new(
+        ghost::http::GhostHttpServer::new(
+            config.signals.browser,
+            config.ghosts.browser_config.banner_seconds,
+        )
+        .with_shell_bridge(ghost::http::ShellBridge {
+            detector: Arc::clone(&detector),
+            store: Arc::clone(&store),
+            switch_tx: switch_tx.clone(),
+            motd_path: expand_path(&config.ghosts.terminal_config.motd_file),
+        }),
+    );
     let ghost_http_server = Arc::clone(&ghost_http);
     tokio::spawn(async move {
         ghost_http_server.serve(7711).await;

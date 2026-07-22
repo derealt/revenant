@@ -15,6 +15,23 @@ REVENANT_ACTIVE_FILE="${HOME}/.revenant/terminal-active"
 # ─── Display ghost on shell startup ─────────────────────────────
 
 __revenant_show_ghost() {
+    # A new shell is itself a return signal: announce it to the daemon,
+    # which decides (by its own absence rules) whether this shell
+    # deserves a ghost. The daemon answers with rendered MOTD text.
+    local ghost cwd_json
+    cwd_json="${PWD//\\/\\\\}"
+    cwd_json="${cwd_json//\"/\\\"}"
+    ghost=$(curl -fsS --max-time 0.5 -X POST -H 'Content-Type: application/json' \
+        --data "{\"cwd\":\"${cwd_json}\"}" http://127.0.0.1:7711/shell-open 2>/dev/null)
+    if [[ -n "${ghost}" ]]; then
+        echo ""
+        printf '%s\n' "${ghost}"
+        echo ""
+        date +%s > "${REVENANT_ACTIVE_FILE}" 2>/dev/null
+        return
+    fi
+
+    # Daemon unreachable (or chose silence): fall back to the MOTD file
     if [[ -f "${REVENANT_MOTD}" ]]; then
         # Check if the ghost has expired
         if [[ -f "${REVENANT_META}" ]]; then

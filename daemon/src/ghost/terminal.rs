@@ -26,58 +26,22 @@ impl TerminalGhost {
 
     /// Write the context card as a terminal MOTD
     pub async fn inject(&self, card: &ContextCard) -> Result<()> {
-        let now = Utc::now();
-        let age = now.signed_duration_since(card.created_at);
-        let age_str = format_duration(age);
-        let ttl_min = card.ttl_seconds / 60;
-
-        // Intent-based accent color
-        let accent = intent_color(&card.summary);
-        let dim = "\x1b[2m";
-        let reset = "\x1b[0m";
-        let white = "\x1b[97m";
-        let gold = "\x1b[38;5;178m";
-
-        // Build premium MOTD with double-line borders and visual hierarchy
-        let mut motd = String::with_capacity(512);
-
-        // Top border with project name centered
-        let header = format!(" REVENANT \u{2502} {} \u{2502} {} ago ", card.project_name, age_str);
-        motd.push_str(&format!(
-            "{dim}\u{2554}\u{2550}\u{2550}{reset}{accent} {header}{reset}{dim} \u{2550}\u{2550}\u{2557}{reset}\n",
-        ));
-
-        // Summary line - white for legibility
-        motd.push_str(&format!(
-            "{dim}\u{2551}{reset} {white}{summary}{reset}\n",
-            summary = card.summary,
-        ));
-
-        // Next step line - gold accent
-        if !card.next_step.is_empty() {
-            motd.push_str(&format!(
-                "{dim}\u{2551}{reset} {gold}\u{2192} {next}{reset}\n",
-                next = card.next_step,
-            ));
-        }
-
-        // Bottom border with ghost TTL
-        motd.push_str(&format!(
-            "{dim}\u{255a}\u{2550}\u{2550} ghost fades in {ttl_min}min of activity \u{2550}\u{2550}\u{255d}{reset}\n",
-        ));
+        let motd = render_motd(card);
 
         // Write the MOTD file atomically (write to temp, rename)
         let tmp_path = self.motd_path.with_extension("tmp");
         tokio::fs::write(&tmp_path, &motd).await?;
         tokio::fs::rename(&tmp_path, &self.motd_path).await?;
 
-        // Also write a machine-readable metadata file for the shell scripts
+        // Also write a machine-readable metadata file for the shell scripts.
+        // Expiry runs from injection, not card creation: a card restored
+        // hours after it was banked must not arrive pre-expired.
         let meta = serde_json::json!({
             "card_id": card.id,
             "project": card.project_name,
             "created_at": card.created_at.to_rfc3339(),
             "ttl_seconds": card.ttl_seconds,
-            "expires_at": (card.created_at + chrono::Duration::seconds(card.ttl_seconds as i64)).to_rfc3339(),
+            "expires_at": (Utc::now() + chrono::Duration::seconds(card.ttl_seconds as i64)).to_rfc3339(),
         });
         let meta_path = self.motd_path.with_extension("json");
         tokio::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
@@ -96,6 +60,53 @@ impl TerminalGhost {
         }
         Ok(())
     }
+}
+
+/// Render a context card as the ANSI terminal ghost. Shared by the
+/// MOTD writer and the /shell-open HTTP endpoint, so a freshly opened
+/// shell and a pre-written MOTD always look identical.
+pub fn render_motd(card: &ContextCard) -> String {
+    let now = Utc::now();
+    let age = now.signed_duration_since(card.created_at);
+    let age_str = format_duration(age);
+    let ttl_min = card.ttl_seconds / 60;
+
+    // Intent-based accent color
+    let accent = intent_color(&card.summary);
+    let dim = "\x1b[2m";
+    let reset = "\x1b[0m";
+    let white = "\x1b[97m";
+    let gold = "\x1b[38;5;178m";
+
+    // Build premium MOTD with double-line borders and visual hierarchy
+    let mut motd = String::with_capacity(512);
+
+    // Top border with project name centered
+    let header = format!(" REVENANT \u{2502} {} \u{2502} {} ago ", card.project_name, age_str);
+    motd.push_str(&format!(
+        "{dim}\u{2554}\u{2550}\u{2550}{reset}{accent} {header}{reset}{dim} \u{2550}\u{2550}\u{2557}{reset}\n",
+    ));
+
+    // Summary line - white for legibility
+    motd.push_str(&format!(
+        "{dim}\u{2551}{reset} {white}{summary}{reset}\n",
+        summary = card.summary,
+    ));
+
+    // Next step line - gold accent
+    if !card.next_step.is_empty() {
+        motd.push_str(&format!(
+            "{dim}\u{2551}{reset} {gold}\u{2192} {next}{reset}\n",
+            next = card.next_step,
+        ));
+    }
+
+    // Bottom border with ghost TTL
+    motd.push_str(&format!(
+        "{dim}\u{255a}\u{2550}\u{2550} ghost fades in {ttl_min}min of activity \u{2550}\u{2550}\u{255d}{reset}\n",
+    ));
+
+    motd
 }
 
 /// Map card content to an intent-based ANSI accent color

@@ -388,6 +388,59 @@ fn detector_emits_return_on_branch_change() {
 }
 
 #[test]
+fn detector_shell_open_gates_on_absence() {
+    let detector = SwitchDetector::new(&RevenantConfig::default());
+
+    // A shell opening on a project the daemon has never seen is a
+    // return: the daemon cannot prove the user was recently here
+    let event = detector
+        .shell_opened("/tmp/shell-a")
+        .expect("first sighting must summon a ghost");
+    assert!(matches!(event.kind, SwitchKind::Return { .. }));
+
+    // A second shell moments later is mid-flow: silent
+    assert!(detector.shell_opened("/tmp/shell-a").is_none());
+
+    // Watcher-fed activity keeps new shells silent too
+    detector.record_activity("/tmp/shell-a");
+    assert!(detector.shell_opened("/tmp/shell-a").is_none());
+
+    // A shell opening on a different project is a switch: the Return
+    // carries the origin, like the watcher's project-hop path
+    let event = detector
+        .shell_opened("/tmp/shell-b")
+        .expect("project hop via shell must summon a ghost");
+    match event.kind {
+        SwitchKind::Return {
+            project_dir,
+            from_project,
+        } => {
+            assert_eq!(project_dir, "/tmp/shell-b");
+            assert_eq!(from_project.as_deref(), Some("/tmp/shell-a"));
+        }
+        other => panic!("expected Return, got {other:?}"),
+    }
+}
+
+#[test]
+fn detector_shell_open_returns_after_absence() {
+    // Threshold zero: any measurable gap counts as an absence
+    let mut config = RevenantConfig::default();
+    config.daemon.absence_threshold_minutes = 0;
+    let detector = SwitchDetector::new(&config);
+
+    detector.shell_opened("/tmp/shell-c");
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let event = detector
+        .shell_opened("/tmp/shell-c")
+        .expect("a shell after an absence must summon a ghost");
+    match event.kind {
+        SwitchKind::Return { from_project, .. } => assert!(from_project.is_none()),
+        other => panic!("expected Return, got {other:?}"),
+    }
+}
+
+#[test]
 fn privacy_defaults_are_opt_in() {
     // The real defaults, not local booleans: clipboard and browser signal
     // capture must ship disabled, and noisy dirs must be ignored.
@@ -470,6 +523,97 @@ async fn http_server_serves_inject_and_clear() {
         get().await.contains(r#"{"type":"clear"}"#),
         "expired card must be served as cleared"
     );
+}
+
+#[tokio::test]
+async fn http_shell_open_answers_a_new_shell() {
+    use revenant::ghost::http::{GhostHttpServer, ShellBridge};
+    use revenant::store::ContextCard;
+    use std::sync::Arc;
+
+    let tmp = std::env::temp_dir().join("revenant-test-shell-open");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(tmp.join("project/.git")).unwrap();
+    let project_dir = tmp.join("project").to_str().unwrap().to_string();
+
+    // A real store holding one card for the project
+    let store = Arc::new(ContextStore::open(&tmp.join("shell.db")).unwrap());
+    store.migrate().unwrap();
+    store
+        .save_card(&ContextCard {
+            id: "sh1".into(),
+            project_dir: project_dir.clone(),
+            project_name: "project".into(),
+            summary: "You were wiring the shell-open bridge.".into(),
+            next_step: "Drive the endpoint test.".into(),
+            created_at: chrono::Utc::now(),
+            signals_json: "{}".into(),
+            ttl_seconds: 120,
+        })
+        .unwrap();
+
+    let (switch_tx, mut switch_rx) = tokio::sync::mpsc::channel(8);
+    let motd_path = tmp.join("motd");
+    let server = Arc::new(GhostHttpServer::new(false, 60).with_shell_bridge(ShellBridge {
+        detector: Arc::new(SwitchDetector::new(&RevenantConfig::default())),
+        store: Arc::clone(&store),
+        switch_tx,
+        motd_path: motd_path.clone(),
+    }));
+    let port = 17712u16;
+    let serve = Arc::clone(&server);
+    tokio::spawn(async move { serve.serve(port).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let shell_open = |cwd: String| async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let body = format!(r#"{{"cwd":"{cwd}"}}"#);
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let req = format!(
+            "POST /shell-open HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut resp = String::new();
+        s.read_to_string(&mut resp).await.unwrap();
+        resp
+    };
+
+    // A shell opening inside the project pulls its ghost and fires a Return
+    let resp = shell_open(project_dir.clone()).await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
+    assert!(resp.contains("You were wiring the shell-open bridge."));
+    assert!(resp.contains("REVENANT"), "response must be the rendered MOTD");
+    let event = switch_rx.recv().await.expect("shell-open must emit a switch event");
+    assert!(matches!(event.kind, SwitchKind::Return { .. }));
+
+    // A second shell moments later is mid-flow: silent, no event
+    let resp = shell_open(project_dir.clone()).await;
+    assert!(resp.starts_with("HTTP/1.1 204"), "got: {resp}");
+    assert!(switch_rx.try_recv().is_err(), "mid-flow shell must not emit an event");
+
+    // With a live MOTD on disk, any shell inside its window sees it
+    fs::write(&motd_path, "LIVE GHOST BODY").unwrap();
+    let resp = shell_open(project_dir.clone()).await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
+    assert!(resp.contains("LIVE GHOST BODY"));
+
+    // Malformed body is rejected
+    let bad = {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(
+            b"POST /shell-open HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\nConnection: close\r\n\r\nnot json",
+        )
+        .await
+        .unwrap();
+        let mut resp = String::new();
+        s.read_to_string(&mut resp).await.unwrap();
+        resp
+    };
+    assert!(bad.starts_with("HTTP/1.1 400"), "got: {bad}");
+
+    cleanup_test_project(&tmp);
 }
 
 #[tokio::test]

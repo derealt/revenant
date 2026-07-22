@@ -209,7 +209,7 @@ pub async fn run_watcher(
 }
 
 /// Walk up from a path to find the nearest .git directory
-fn find_git_root(path: &PathBuf) -> Option<PathBuf> {
+pub fn find_git_root(path: &PathBuf) -> Option<PathBuf> {
     let mut current = if path.is_file() {
         path.parent()?.to_path_buf()
     } else {

@@ -123,6 +123,57 @@ impl SwitchDetector {
         }
     }
 
+    /// A new shell opened on a project. Unlike record_activity, a project
+    /// the daemon has never seen counts as an absence: a fresh shell on an
+    /// untracked project deserves its ghost, because the daemon cannot
+    /// prove the user was recently here. A shell opened mid-flow stays
+    /// silent.
+    pub fn shell_opened(&self, project_dir: &str) -> Option<SwitchEvent> {
+        let now = Instant::now();
+        let mut projects = self.projects.lock().ok()?;
+        let mut active = self.active_project.lock().ok()?;
+
+        let switched_from = match *active {
+            Some(ref current) if current != project_dir => Some(current.clone()),
+            _ => None,
+        };
+
+        let first_sighting = !projects.contains_key(project_dir);
+        let tracker = projects
+            .entry(project_dir.to_string())
+            .or_insert_with(|| ProjectTracker {
+                last_branch: None,
+                last_activity: now,
+                ghost_active: false,
+                ghost_displayed_at: None,
+            });
+
+        let was_absent =
+            first_sighting || now.duration_since(tracker.last_activity) > self.absence_threshold;
+        tracker.last_activity = now;
+        *active = Some(project_dir.to_string());
+
+        if switched_from.is_some() {
+            Some(SwitchEvent {
+                kind: SwitchKind::Return {
+                    project_dir: project_dir.to_string(),
+                    from_project: switched_from,
+                },
+                timestamp: Utc::now(),
+            })
+        } else if was_absent {
+            Some(SwitchEvent {
+                kind: SwitchKind::Return {
+                    project_dir: project_dir.to_string(),
+                    from_project: None,
+                },
+                timestamp: Utc::now(),
+            })
+        } else {
+            None
+        }
+    }
+
     /// The project the user is currently working in, if known
     pub fn active_project(&self) -> Option<String> {
         self.active_project.lock().ok()?.clone()
