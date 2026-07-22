@@ -1,9 +1,15 @@
 // REVENANT Ghost - Chrome Extension Background Service Worker
-// Polls the local daemon's HTTP endpoint for ghost cards.
+//
+// MV3 service workers are suspended after ~30s of idle: setInterval dies
+// and in-memory state is wiped. So the heartbeat is a chrome.alarms timer
+// (which wakes the worker), state lives in chrome.storage.session (which
+// survives suspends), and page loads trigger a live fetch when the cache
+// is cold. Polls also fire on tab activation and navigation, which is
+// when a ghost actually needs to appear.
 
 const DAEMON_URL = "http://127.0.0.1:7711/ghost";
 const TAB_REPORT_URL = "http://127.0.0.1:7711/tab";
-const POLL_INTERVAL = 3000;
+const POLL_ALARM = "revenant-poll";
 
 interface ContextCard {
   id: string;
@@ -19,70 +25,126 @@ interface DaemonMessage {
   card?: ContextCard;
 }
 
-let activeCard: ContextCard | null = null;
+interface GhostState {
+  active: ContextCard | null;
+  dismissedId: string | null;
+}
 
-async function pollDaemon() {
+// ─── State (survives service worker suspends) ──────────────────────
+
+async function getState(): Promise<GhostState> {
+  const s = await chrome.storage.session.get(["active", "dismissedId"]);
+  return {
+    active: (s.active as ContextCard | undefined) ?? null,
+    dismissedId: (s.dismissedId as string | undefined) ?? null,
+  };
+}
+
+async function setState(patch: Partial<GhostState>): Promise<void> {
+  await chrome.storage.session.set(patch);
+}
+
+// ─── Daemon I/O ────────────────────────────────────────────────────
+
+async function fetchGhost(): Promise<ContextCard | null> {
   try {
     const resp = await fetch(DAEMON_URL);
-    if (!resp.ok) return;
+    if (!resp.ok) return null;
     const msg: DaemonMessage = await resp.json();
-
-    if (msg.type === "inject" && msg.card) {
-      if (!activeCard || activeCard.id !== msg.card.id) {
-        activeCard = msg.card;
-        const tabs = await chrome.tabs.query({});
-        for (const tab of tabs) {
-          if (tab.id && tab.url && !tab.url.startsWith("chrome://")) {
-            chrome.tabs.sendMessage(tab.id, { type: "showGhost", card: activeCard }).catch(() => {});
-          }
-        }
-        chrome.action.setBadgeText({ text: "!" });
-        chrome.action.setBadgeBackgroundColor({ color: "#0a8a7e" });
-      }
-    } else if (msg.type === "clear" && activeCard) {
-      activeCard = null;
-      const tabs = await chrome.tabs.query({});
-      for (const tab of tabs) {
-        if (tab.id) chrome.tabs.sendMessage(tab.id, { type: "clearGhost" }).catch(() => {});
-      }
-      chrome.action.setBadgeText({ text: "" });
-    }
+    return msg.type === "inject" && msg.card ? msg.card : null;
   } catch {
     // Daemon not running
+    return null;
   }
 }
 
-setInterval(pollDaemon, POLL_INTERVAL);
+// ─── Broadcast to tabs ─────────────────────────────────────────────
+
+async function broadcast(message: object): Promise<void> {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (tab.id && tab.url && /^https?:/.test(tab.url)) {
+      chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+    }
+  }
+}
+
+function setBadge(active: boolean): void {
+  chrome.action.setBadgeText({ text: active ? "!" : "" });
+  if (active) {
+    chrome.action.setBadgeBackgroundColor({ color: "#0a8a7e" });
+  }
+}
+
+// ─── Poll ──────────────────────────────────────────────────────────
+
+async function pollDaemon(): Promise<void> {
+  const card = await fetchGhost();
+  const { active, dismissedId } = await getState();
+
+  if (card && card.id !== dismissedId) {
+    if (!active || active.id !== card.id) {
+      await setState({ active: card });
+      await broadcast({ type: "showGhost", card });
+      setBadge(true);
+    }
+  } else if (!card && active) {
+    await setState({ active: null });
+    await broadcast({ type: "clearGhost" });
+    setBadge(false);
+  }
+}
+
+// ─── Heartbeat: alarms wake the worker, unlike setInterval ─────────
+
+chrome.alarms.create(POLL_ALARM, { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === POLL_ALARM) pollDaemon();
+});
+
+// Poll whenever the worker boots (install, browser start, wake-up)
 pollDaemon();
+
+// ─── Messages from content scripts and popup ───────────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "getActiveGhost") {
-    sendResponse({ card: activeCard });
-  } else if (msg.type === "dismissGhost") {
-    activeCard = null;
-    chrome.tabs.query({}).then(tabs => {
-      for (const tab of tabs) {
-        if (tab.id) chrome.tabs.sendMessage(tab.id, { type: "clearGhost" }).catch(() => {});
+    (async () => {
+      const { active, dismissedId } = await getState();
+      if (active) {
+        sendResponse({ card: active });
+        return;
       }
-    });
-    chrome.action.setBadgeText({ text: "" });
-    sendResponse({ ok: true });
+      // Cold cache (worker just woke): ask the daemon directly
+      const card = await fetchGhost();
+      if (card && card.id !== dismissedId) {
+        await setState({ active: card });
+        setBadge(true);
+        sendResponse({ card });
+      } else {
+        sendResponse({ card: null });
+      }
+    })();
+    return true; // keep sendResponse alive for the async reply
   }
-  return true;
+
+  if (msg.type === "dismissGhost") {
+    (async () => {
+      const { active } = await getState();
+      await setState({ active: null, dismissedId: active?.id ?? null });
+      await broadcast({ type: "clearGhost" });
+      setBadge(false);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  return false;
 });
 
-chrome.tabs.onActivated.addListener(async (info) => {
-  if (activeCard && info.tabId) {
-    setTimeout(() => {
-      chrome.tabs.sendMessage(info.tabId, { type: "showGhost", card: activeCard }).catch(() => {});
-    }, 500);
-  }
-});
+// ─── Tab events: re-show the ghost and report the active tab ───────
 
-// Report the active tab to the daemon as a context signal.
-// The daemon discards these unless the user set `signals.browser = true`,
-// so nothing is stored without an explicit opt-in.
-async function reportActiveTab() {
+async function reportActiveTab(): Promise<void> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab?.url || !/^https?:/.test(tab.url)) return;
@@ -102,7 +164,20 @@ async function reportActiveTab() {
   }
 }
 
-chrome.tabs.onActivated.addListener(() => { reportActiveTab(); });
+chrome.tabs.onActivated.addListener(async (info) => {
+  reportActiveTab();
+  await pollDaemon();
+  const { active } = await getState();
+  if (active && info.tabId) {
+    setTimeout(() => {
+      chrome.tabs.sendMessage(info.tabId, { type: "showGhost", card: active }).catch(() => {});
+    }, 500);
+  }
+});
+
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
-  if (changeInfo.status === "complete") reportActiveTab();
+  if (changeInfo.status === "complete") {
+    reportActiveTab();
+    pollDaemon();
+  }
 });
