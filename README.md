@@ -128,10 +128,10 @@ Supports: Claude (Anthropic), OpenAI, Ollama (local, free).
 
 ## Requirements
 
-- macOS (Linux coming soon)
+- macOS (Apple Silicon or Intel), or Linux x86_64 with systemd (daemon CI-tested on Ubuntu; field reports welcome)
 - zsh, bash, or fish shell
 - Chrome (for browser ghost)
-- VS Code (for editor ghost)
+- VS Code or Cursor (for editor ghost)
 
 ## License
 
