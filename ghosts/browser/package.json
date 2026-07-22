@@ -9,7 +9,7 @@
     "watch": "tsc -watch -p tsconfig.json",
     "clean": "rm -rf dist/",
     "lint": "eslint src --ext ts",
-    "package": "npm run clean && npm run build && cp manifest.json dist/ && cp src/ghost.css dist/ && cp src/popup.html dist/"
+    "package": "npm run clean && npm run build && cp manifest.json icon16.png icon32.png icon48.png icon128.png dist/ && cp src/ghost.css src/popup.html src/popup.js dist/"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.260",

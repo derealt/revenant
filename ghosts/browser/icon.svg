@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="#0a0c10"/>
+  <circle cx="64" cy="64" r="58" fill="none" stroke="#4eeadb" stroke-width="1.5" opacity="0.3"/>
+
+  <!-- Ghost body - a subtle, minimal apparition -->
+  <path d="M64 28 C44 28 32 44 32 62 L32 88 C32 90 34 90 36 88 L40 84 C42 82 44 82 46 84 L50 88 C52 90 54 90 56 88 L60 84 C62 82 66 82 68 84 L72 88 C74 90 76 90 78 88 L82 84 C84 82 86 82 88 84 L92 88 C94 90 96 90 96 88 L96 62 C96 44 84 28 64 28Z"
+    fill="none"
+    stroke="#4eeadb"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    opacity="0.9"/>
+
+  <!-- Left eye - just a dot -->
+  <circle cx="50" cy="54" r="4" fill="#4eeadb" opacity="0.9"/>
+
+  <!-- Right eye - just a dot -->
+  <circle cx="78" cy="54" r="4" fill="#4eeadb" opacity="0.9"/>
+
+  <!-- Subtle glow behind ghost -->
+  <circle cx="64" cy="58" r="30" fill="#4eeadb" opacity="0.04"/>
+  <circle cx="64" cy="58" r="20" fill="#4eeadb" opacity="0.06"/>
+</svg>

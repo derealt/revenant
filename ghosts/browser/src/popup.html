@@ -79,27 +79,6 @@
     <div class="no-ghost">No active ghost. Context will appear when you return to a project.</div>
   </div>
 
-  <script>
-    chrome.runtime.sendMessage({ type: 'getActiveGhost' }, (response) => {
-      const container = document.getElementById('content');
-      if (!response?.card) return;
-
-      const card = response.card;
-      container.innerHTML = `
-        <div class="card">
-          <div class="card-project">${card.project_name}</div>
-          <div class="card-summary">${card.summary}</div>
-          ${card.next_step ? `<div class="card-next">Next: ${card.next_step}</div>` : ''}
-        </div>
-        <button class="dismiss-btn" id="dismiss">Dismiss Ghost</button>
-      `;
-
-      document.getElementById('dismiss')?.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ type: 'dismissGhost' }, () => {
-          container.innerHTML = '<div class="no-ghost">Ghost dismissed.</div>';
-        });
-      });
-    });
-  </script>
+  <script src="popup.js"></script>
 </body>
 </html>
