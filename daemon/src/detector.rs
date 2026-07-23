@@ -39,8 +39,10 @@ pub enum SwitchKind {
 struct ProjectTracker {
     /// Last known git branch
     last_branch: Option<String>,
-    /// When we last saw activity in this project
-    last_activity: Instant,
+    /// When we last saw activity in this project. Wall clock, not
+    /// Instant: on macOS Instant stops counting while the machine
+    /// sleeps, so an overnight absence would register as minutes.
+    last_activity: std::time::SystemTime,
     /// Whether a ghost is currently displayed for this project
     ghost_active: bool,
     /// When the ghost was displayed
@@ -70,7 +72,7 @@ impl SwitchDetector {
 
     /// Record activity in a project, return switch event if context changed
     pub fn record_activity(&self, project_dir: &str) -> Option<SwitchEvent> {
-        let now = Instant::now();
+        let now = std::time::SystemTime::now();
         let mut projects = self.projects.lock().ok()?;
         let mut active = self.active_project.lock().ok()?;
 
@@ -84,7 +86,7 @@ impl SwitchDetector {
         } else {
             None
         };
-        
+
         // Update tracker for this project
         let tracker = projects
             .entry(project_dir.to_string())
@@ -95,7 +97,10 @@ impl SwitchDetector {
                 ghost_displayed_at: None,
             });
 
-        let was_absent = now.duration_since(tracker.last_activity) > self.absence_threshold;
+        let was_absent = now
+            .duration_since(tracker.last_activity)
+            .unwrap_or_default()
+            > self.absence_threshold;
         tracker.last_activity = now;
         *active = Some(project_dir.to_string());
 
@@ -129,7 +134,7 @@ impl SwitchDetector {
     /// prove the user was recently here. A shell opened mid-flow stays
     /// silent.
     pub fn shell_opened(&self, project_dir: &str) -> Option<SwitchEvent> {
-        let now = Instant::now();
+        let now = std::time::SystemTime::now();
         let mut projects = self.projects.lock().ok()?;
         let mut active = self.active_project.lock().ok()?;
 
@@ -148,8 +153,11 @@ impl SwitchDetector {
                 ghost_displayed_at: None,
             });
 
-        let was_absent =
-            first_sighting || now.duration_since(tracker.last_activity) > self.absence_threshold;
+        let was_absent = first_sighting
+            || now
+                .duration_since(tracker.last_activity)
+                .unwrap_or_default()
+                > self.absence_threshold;
 
         // Only a summoning shell resets the absence clock. A silent
         // mid-flow tab must not push the clock forward, or occasional

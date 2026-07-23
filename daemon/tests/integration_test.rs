@@ -587,10 +587,18 @@ async fn http_shell_open_answers_a_new_shell() {
     let event = switch_rx.recv().await.expect("shell-open must emit a switch event");
     assert!(matches!(event.kind, SwitchKind::Return { .. }));
 
-    // A second shell moments later is mid-flow: silent, no event
+    // A second shell moments later is STILL greeted (opening a terminal
+    // is asking "where was I?"), but mid-flow it must not wake the
+    // other channels: no switch event
     let resp = shell_open(project_dir.clone()).await;
-    assert!(resp.starts_with("HTTP/1.1 204"), "got: {resp}");
+    assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
+    assert!(resp.contains("You were wiring the shell-open bridge."));
     assert!(switch_rx.try_recv().is_err(), "mid-flow shell must not emit an event");
+
+    // A shell outside any project still gets the freshest card on record
+    let resp = shell_open("/".to_string()).await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
+    assert!(resp.contains("You were wiring the shell-open bridge."));
 
     // With a live MOTD on disk, any shell inside its window sees it
     fs::write(&motd_path, "LIVE GHOST BODY").unwrap();

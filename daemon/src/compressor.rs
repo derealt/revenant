@@ -641,10 +641,21 @@ fn rewrite_commit_message(raw: &str) -> String {
                     format!("{} {}", gerund, humanize_commit_body(rest))
                 }
             } else {
-                // Not a recognized verb - use the message as-is, lowercased
+                // Not a recognized verb - use the message as-is.
+                // Lowercase the leading letter only when it starts an
+                // ordinary word; acronyms ("README: ...") keep their
+                // case instead of becoming "rEADME".
+                let first_word = msg.split_whitespace().next().unwrap_or("");
+                let acronym = first_word
+                    .chars()
+                    .filter(|c| c.is_ascii_alphabetic())
+                    .skip(1)
+                    .any(|c| c.is_ascii_uppercase());
                 let mut s = msg.to_string();
-                if let Some(first_char) = s.get_mut(..1) {
-                    first_char.make_ascii_lowercase();
+                if !acronym {
+                    if let Some(first_char) = s.get_mut(..1) {
+                        first_char.make_ascii_lowercase();
+                    }
                 }
                 s
             }
@@ -1326,7 +1337,12 @@ fn extract_topic(state: &WorkingState) -> String {
     if let Some(ref git) = state.git {
         if let Some(commit) = git.recent_commits.first() {
             let rewritten = rewrite_commit_message(&commit.message);
-            if !rewritten.is_empty() {
+            // Only an activity-shaped rewrite may become the topic. A
+            // sentence-shaped commit subject ("Terminal ghost answers
+            // the opening shell") passed through as-is must never be
+            // glued after "you were exploring"; fall through to branch
+            // and file signals instead.
+            if !rewritten.is_empty() && rewrite_is_activity(&rewritten) {
                 // The rewritten message already starts with a gerund like "fixing X"
                 // We need just the object/topic part for "{intent} {topic}" templates
                 // But sometimes the intent IS the topic (when commit = full context)
@@ -1370,6 +1386,23 @@ fn extract_topic(state: &WorkingState) -> String {
 /// Extract the object/topic from a rewritten commit message
 /// "fixing WebSocket reconnection" → "WebSocket reconnection"
 /// "adding user authentication" → "user authentication"
+/// Is this rewrite an activity phrase (gerund-led), as opposed to a
+/// sentence-shaped commit subject that passed through the rewriter
+/// untouched? Only activity phrases may fill "{intent} {topic}" slots.
+fn rewrite_is_activity(rewrite: &str) -> bool {
+    let first = rewrite.split_whitespace().next().unwrap_or("");
+    if first.is_empty() {
+        return false;
+    }
+    const FIXED_GERUNDS: &[&str] = &[
+        "fixing", "adding", "updating", "refactoring", "removing",
+        "merging", "testing", "bumping", "reverting", "setting",
+        "implementing", "reorganizing", "working", "creating",
+        "improving", "enabling", "disabling",
+    ];
+    FIXED_GERUNDS.contains(&first) || (first.ends_with("ing") && is_known_gerund(first))
+}
+
 fn extract_object_from_rewrite(rewrite: &str) -> String {
     // The rewrite starts with a gerund verb - try to strip it
     let gerunds = [
@@ -1846,6 +1879,25 @@ mod tests {
         assert_eq!(rewrite_commit_message("feat: add login page"), "adding login page");
         assert_eq!(rewrite_commit_message("Refactor payment flow"), "refactoring payment flow");
         assert_eq!(rewrite_commit_message("Remove dead code"), "removing dead code");
+        // Acronym-led subjects keep their case: never "rEADME"
+        assert_eq!(
+            rewrite_commit_message("README: Linux is real, Cursor is supported"),
+            "README: Linux is real, Cursor is supported"
+        );
+    }
+
+    #[test]
+    fn test_sentence_commits_are_not_activities() {
+        // Sentence-shaped subjects must never fill "{intent} {topic}"
+        assert!(!rewrite_is_activity(
+            &rewrite_commit_message("Terminal ghost answers the opening shell: /shell-open return signal")
+        ));
+        assert!(!rewrite_is_activity(
+            &rewrite_commit_message("README: Linux is real, Cursor is supported")
+        ));
+        // Verb-led subjects still are activities
+        assert!(rewrite_is_activity(&rewrite_commit_message("Fix WS reconnect")));
+        assert!(rewrite_is_activity(&rewrite_commit_message("Wire the detector")));
     }
 
     #[test]

@@ -247,9 +247,11 @@ impl GhostHttpServer {
     }
 }
 
-/// Answer a freshly opened shell. The shell-open is itself a return
-/// signal: the only one a terminal can emit before any file is saved.
-/// The daemon's own absence rules decide whether it deserves a ghost.
+/// Answer a freshly opened shell. Opening a terminal IS asking "where
+/// was I?", so the shell is ALWAYS greeted with the latest card: that
+/// is the terminal channel's original design. The detector's absence
+/// rules only decide the second question: whether this shell-open also
+/// counts as a return that wakes the other ghost channels.
 async fn shell_open_response(bridge: &ShellBridge, cwd: &str) -> String {
     // A live terminal ghost is served as-is, so every shell that opens
     // inside its window sees the same MOTD the reaper will soon fade
@@ -258,51 +260,52 @@ async fn shell_open_response(bridge: &ShellBridge, cwd: &str) -> String {
     }
 
     // Resolve which project this shell belongs to: its own git root,
-    // else wherever the user last was, else the freshest card on record
+    // else wherever the user last was
     let project = crate::watcher::find_git_root(&PathBuf::from(cwd))
         .map(|p| p.to_string_lossy().to_string())
-        .or_else(|| bridge.detector.active_project())
+        .or_else(|| bridge.detector.active_project());
+
+    // Wake the other channels only when the detector calls this a
+    // return (absence, project switch, or first sighting). A mid-flow
+    // tab still gets its greeting below, but must not flash banners
+    // in the browser and editor.
+    if let Some(ref project) = project {
+        if let Some(event) = bridge.detector.shell_opened(project) {
+            // A shell-open landing on a different project banks a
+            // departure for the previous one first, exactly like the
+            // watcher's switch path
+            if let SwitchKind::Return {
+                from_project: Some(ref prev),
+                ..
+            } = event.kind
+            {
+                let _ = bridge
+                    .switch_tx
+                    .send(SwitchEvent {
+                        kind: SwitchKind::Departure {
+                            project_dir: prev.clone(),
+                        },
+                        timestamp: chrono::Utc::now(),
+                    })
+                    .await;
+            }
+            info!("shell opened in {project}: treating as return");
+            let _ = bridge.switch_tx.send(event).await;
+        }
+    }
+
+    // The greeting: the project's own latest card, else the freshest
+    // card on record. Silence only when the store is empty.
+    let card = project
+        .as_deref()
+        .and_then(|p| bridge.store.latest_card(p).ok().flatten())
         .or_else(|| {
             bridge
                 .store
-                .cards_since(chrono::Utc::now() - chrono::Duration::days(7), 1)
+                .cards_since(chrono::Utc::now() - chrono::Duration::days(30), 1)
                 .ok()
                 .and_then(|cards| cards.into_iter().next())
-                .map(|c| c.project_dir)
         });
-    let project = match project {
-        Some(p) => p,
-        None => return text_response("204 No Content", ""),
-    };
-
-    let event = match bridge.detector.shell_opened(&project) {
-        Some(e) => e,
-        None => return text_response("204 No Content", ""),
-    };
-
-    // A shell-open landing on a different project banks a departure for
-    // the previous one first, exactly like the watcher's switch path
-    if let SwitchKind::Return {
-        from_project: Some(ref prev),
-        ..
-    } = event.kind
-    {
-        let _ = bridge
-            .switch_tx
-            .send(SwitchEvent {
-                kind: SwitchKind::Departure {
-                    project_dir: prev.clone(),
-                },
-                timestamp: chrono::Utc::now(),
-            })
-            .await;
-    }
-
-    let card = bridge.store.latest_card(&project).ok().flatten();
-
-    // Wake the other channels through the normal event loop
-    info!("shell opened in {project}: treating as return");
-    let _ = bridge.switch_tx.send(event).await;
 
     match card {
         Some(card) => text_response("200 OK", &crate::ghost::terminal::render_motd(&card)),

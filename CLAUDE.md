@@ -36,7 +36,7 @@ REVENANT doesn't reduce context switches. It makes each one cost zero.
 - **LLM compression**: Local model (Ollama) or API (Claude/OpenAI) - converts raw state signals into a natural-language context card. The prompt: "Given these signals about what the user was doing, write a 2-sentence note: what they were trying to accomplish, and what their next step was. Write it as if leaving a note for yourself." Default is the rule engine: no LLM, no network.
 - **Ghost injection**: Plugin architecture per tool:
   - **VS Code**: Extension inserts a transient inline decoration (not a real comment - a visual overlay that doesn't modify the file)
-  - **Terminal**: Every new shell POSTs its cwd to the daemon's `/shell-open` endpoint; the daemon decides by its absence rules whether that shell-open is a return and answers with rendered MOTD text. `~/.revenant/motd` remains as the live-ghost window and the fallback when the daemon is unreachable.
+  - **Terminal**: Every new shell POSTs its cwd to the daemon's `/shell-open` endpoint and is ALWAYS answered with the latest card, rendered as MOTD text: opening a terminal is asking "where was I?". The daemon's absence rules decide only the second question: whether that shell-open also counts as a return that wakes the other ghost channels. `~/.revenant/motd` remains as the live-ghost window and the fallback when the daemon is unreachable.
   - **Slack**: Go sidecar posts ephemeral message (visible only to you)
   - **Browser**: Extension polls the daemon's localhost HTTP server and shows a subtle banner
   - **Obsidian**: Plugin polls a state file and injects a transient callout block

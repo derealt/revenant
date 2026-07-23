@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -75,8 +75,10 @@ pub async fn run_watcher(
         watcher.watch(root, RecursiveMode::Recursive)?;
     }
 
-    // Transition state
-    let mut last_event_time = Instant::now();
+    // Transition state. Wall clock, not Instant: on macOS Instant stops
+    // counting while the machine sleeps, so an overnight absence would
+    // register as minutes and the return would go undetected.
+    let mut last_event_time = SystemTime::now();
     let mut active_project: Option<String> = None;
     // Set once the periodic check has reported a departure for the current
     // absence, so we do not re-send one every poll tick while away
@@ -100,8 +102,11 @@ pub async fn run_watcher(
                         continue;
                     }
 
-                    let now = Instant::now();
-                    let was_absent = now.duration_since(last_event_time) > absence_threshold;
+                    let now = SystemTime::now();
+                    let was_absent = now
+                        .duration_since(last_event_time)
+                        .unwrap_or_default()
+                        > absence_threshold;
 
                     // Detect which project this event belongs to
                     let project_dir = event
@@ -190,7 +195,9 @@ pub async fn run_watcher(
             }
             // Periodic absence check - reports each absence exactly once
             _ = tokio::time::sleep(Duration::from_secs(30)) => {
-                let elapsed = Instant::now().duration_since(last_event_time);
+                let elapsed = SystemTime::now()
+                    .duration_since(last_event_time)
+                    .unwrap_or_default();
                 if elapsed > absence_threshold && !absence_departure_sent {
                     if let Some(ref project) = active_project {
                         debug!("absence detected for {}", project);
