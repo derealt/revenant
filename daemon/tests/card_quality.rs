@@ -280,6 +280,66 @@ fn cursor_anchor_sharpens_the_next_step_and_rides_the_card() {
 }
 
 #[test]
+fn next_step_restores_intent_and_never_coaches() {
+    use revenant::signals::editor::{CursorAnchor, EditorState};
+
+    // Many files in flight: the old predictor lectured ("consider
+    // breaking them into smaller commits"). A next step restores what
+    // YOU were about to do; it never judges how you work.
+    let many: Vec<(&str, ChangeStatus)> = vec![
+        ("theme/archive.php", ChangeStatus::Modified),
+        ("theme/single.php", ChangeStatus::Modified),
+        ("theme/style.css", ChangeStatus::Modified),
+        ("theme/functions.php", ChangeStatus::Modified),
+        ("theme/header.php", ChangeStatus::Modified),
+        ("theme/footer.php", ChangeStatus::Modified),
+        ("theme/reader.php", ChangeStatus::Modified),
+        ("theme/fonts.css", ChangeStatus::Modified),
+        ("theme/nav.php", ChangeStatus::Modified),
+        ("theme/page.php", ChangeStatus::Modified),
+    ];
+    let mut s = state(
+        "wp-theme",
+        Some(git_state(
+            "dev",
+            "archive reader body: floor font at 18px; bump v1.0.16",
+            &many,
+            "unstaged: 10 files changed",
+        )),
+        None,
+    );
+    let card = rule_based_compress(&s);
+    assert!(
+        !card.next_step.to_lowercase().contains("consider"),
+        "next step must not coach, got: {}",
+        card.next_step
+    );
+    assert!(
+        !card.next_step.to_lowercase().contains("lot of changes"),
+        "next step must not judge volume, got: {}",
+        card.next_step
+    );
+
+    // With a cursor anchor present, the anchor outranks generic hints
+    // even when git is busy
+    s.editor = Some(EditorState {
+        open_files: vec![],
+        active_file: Some("theme/reader.php".into()),
+        active_language: Some("php".into()),
+        cursor: Some(CursorAnchor {
+            file: "/tmp/corpus/wp-theme/theme/reader.php".into(),
+            line: 88,
+        }),
+    });
+    let card = rule_based_compress(&s);
+    assert!(
+        card.next_step.contains("reader.php:88"),
+        "cursor anchor must outrank generic git hints, got: {}",
+        card.next_step
+    );
+}
+
+#[test]
 fn empty_signals_still_produce_a_safe_card() {
     // A project with no git, no terminal, no editor: the card must not
     // panic and must not fabricate specifics it cannot know

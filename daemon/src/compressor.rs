@@ -1013,9 +1013,20 @@ fn predict_next_step(state: &WorkingState) -> String {
             }
         }
 
-        // Rule 5: Many files changed, no commits recently
-        if g.changed_files.len() > 8 {
-            return "That's a lot of changes - consider breaking them into smaller commits.".into();
+        // A next step RESTORES intent; it never judges. The old rule
+        // here ("that's a lot of changes - consider smaller commits")
+        // was coaching, not restoration, and is deliberately gone.
+
+        // Rule 5: The cursor anchor - the sharpest signal of where the
+        // hands actually were. Outranks every generic hint below.
+        if let Some(ref ed) = state.editor {
+            if let Some(ref cursor) = ed.cursor {
+                let name = std::path::Path::new(&cursor.file)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| cursor.file.clone());
+                return format!("Pick up at {}:{} where your cursor was.", name, cursor.line);
+            }
         }
 
         // Rule 6: New file created that might need wiring
