@@ -967,76 +967,78 @@ fn join_natural(items: &[String]) -> String {
 
 // ─── 5. Next Step Predictor ─────────────────────────────────────────────────
 
-/// Predict what the user should do next, deterministically
+/// Restore the user's next step from where their hands and intent were.
+/// THE CARD LAW: a next step RESTORES intent - it states what was in
+/// flight when they left. It never orders, coaches, or judges (the old
+/// "commit them" / "consider smaller commits" rules are deliberately
+/// dead). The only imperatives allowed are resume anchors pointing at
+/// the user's own position ("Pick up at file:line").
 fn predict_next_step(state: &WorkingState) -> String {
     let commands = state.recent_commands();
     let git = state.git.as_ref();
 
-    // Rule 1: Test command was last + common failure indicators
-    if let Some(last_cmd) = commands.first() {
-        let cmd = last_cmd.to_lowercase();
-        if is_test_command(&cmd) {
-            // We can't know exit codes directly, but if they have unstaged changes
-            // after running tests, they might be fixing failures
-            if git.map_or(false, |g| g.modified > 0) {
-                return "Run tests again to see if your changes fix the failures.".into();
-            }
-            return "Tests were running - check if they pass and commit if green.".into();
+    // Rule 1: The cursor anchor - the sharpest signal of where the
+    // hands actually were. Outranks every other rule, including git
+    // state: knowing the exact line beats any inference from status.
+    if let Some(ref ed) = state.editor {
+        if let Some(ref cursor) = ed.cursor {
+            let name = std::path::Path::new(&cursor.file)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| cursor.file.clone());
+            return format!("Pick up at {}:{} where your cursor was.", name, cursor.line);
         }
     }
 
-    // Rule 2: Staged changes with nothing else pending
+    // Rule 2: Test command was last - the verdict is the open thread
+    if let Some(last_cmd) = commands.first() {
+        let cmd = last_cmd.to_lowercase();
+        if is_test_command(&cmd) {
+            // We can't know exit codes directly, but unstaged changes
+            // after running tests read as a fix still in flight
+            if git.map_or(false, |g| g.modified > 0) {
+                return "You were mid test-and-fix - your latest edits landed after the last test run.".into();
+            }
+            return "Tests were running when you left - their verdict is where you stopped.".into();
+        }
+    }
+
+    // Rule 3: Staged changes with nothing else pending - a commit was in flight
     if let Some(g) = git {
         if g.staged > 0 && g.modified == 0 && g.untracked == 0 {
-            return "You've got staged changes ready - commit them.".into();
+            return "You were partway into a commit - the changes were already staged.".into();
         }
 
-        // Rule 3: Staged + unstaged → tests in changed files?
+        // Rule 4: Staged + unstaged with test files alongside
         if g.staged > 0 && g.modified > 0 {
             let has_test_files = g.changed_files.iter().any(|f| {
                 let lower = f.path.to_lowercase();
                 lower.contains("test") || lower.contains("spec")
             });
             if has_test_files {
-                return "Run the tests before committing your staged changes.".into();
+                return "A commit was staged, with test edits still outside it.".into();
             }
         }
 
-        // Rule 4: Unstaged changes only, test files present
+        // Rule 5: Unstaged changes only, test files present
         if g.staged == 0 && g.modified > 0 {
             let has_tests = g.changed_files.iter().any(|f| {
                 let lower = f.path.to_lowercase();
                 lower.contains("test") || lower.contains("spec")
             });
             if has_tests {
-                return "Run tests, then stage and commit.".into();
+                return "Your edits, tests included, were still unstaged.".into();
             }
         }
 
-        // A next step RESTORES intent; it never judges. The old rule
-        // here ("that's a lot of changes - consider smaller commits")
-        // was coaching, not restoration, and is deliberately gone.
-
-        // Rule 5: The cursor anchor - the sharpest signal of where the
-        // hands actually were. Outranks every generic hint below.
-        if let Some(ref ed) = state.editor {
-            if let Some(ref cursor) = ed.cursor {
-                let name = std::path::Path::new(&cursor.file)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| cursor.file.clone());
-                return format!("Pick up at {}:{} where your cursor was.", name, cursor.line);
-            }
-        }
-
-        // Rule 6: New file created that might need wiring
+        // Rule 6: A single new file - it was being built out
         let new_files: Vec<&str> = g.changed_files.iter()
             .filter(|f| matches!(f.status, ChangeStatus::Added | ChangeStatus::Untracked))
             .map(|f| f.path.as_str())
             .collect();
         if new_files.len() == 1 {
             let desc = describe_path(new_files[0]);
-            return format!("Wire {} into the module and make sure it's imported.", desc.short_name);
+            return format!("You had just created {} and were building it out.", desc.short_name);
         }
 
         // Rule 7: Package/dependency file changed
@@ -1047,7 +1049,7 @@ fn predict_next_step(state: &WorkingState) -> String {
                 | "go.sum" | "Pipfile" | "requirements.txt" | "Gemfile"
                 | "poetry.lock" | "pyproject.toml")
         }) {
-            return "Dependencies changed - run install to sync.".into();
+            return "You were mid-change to the project's dependencies.".into();
         }
 
         // Rule 8: Migration file created
@@ -1056,80 +1058,71 @@ fn predict_next_step(state: &WorkingState) -> String {
             (lower.contains("migration") || lower.contains("migrate"))
                 && matches!(f.status, ChangeStatus::Added | ChangeStatus::Untracked)
         }) {
-            return "You've got a new migration - run it against the database.".into();
+            return "You had just written a new database migration.".into();
         }
 
-        // Rule 9: On feature branch, changes look complete
+        // Rule 9: On a feature branch with a clean tree - a stopping point
         let branch = &g.branch;
         if branch != "main" && branch != "master" && branch != "dev"
             && g.staged == 0 && g.modified == 0 && g.untracked == 0
         {
-            return "Branch looks clean - might be ready for a PR.".into();
+            return format!("You stopped at a clean point - everything on {branch} was committed.");
         }
 
         // Rule 10: Unstaged changes, no tests
         if g.staged == 0 && g.modified > 0 {
-            return "Stage your changes and commit when you're ready.".into();
+            return "Your edits were still unstaged - nothing was committed yet.".into();
         }
     }
 
-    // Rule 11: Terminal commands give hints
+    // Rule 11: Terminal commands carry the open thread
     for cmd in commands.iter().take(3) {
         let cmd_lower = cmd.to_lowercase();
 
         // Build commands
         if cmd_lower.contains("build") && (cmd_lower.contains("error") || cmd_lower.contains("fail")) {
-            return "Fix the build errors and try again.".into();
+            return "The build was failing when you left.".into();
         }
 
         // Install commands
         if cmd_lower.starts_with("npm install") || cmd_lower.starts_with("yarn add")
             || cmd_lower.starts_with("cargo add") || cmd_lower.starts_with("pip install")
         {
-            return "Dependencies updated - continue with your changes.".into();
+            return "You had just pulled in new dependencies.".into();
         }
 
         // Git stash
         if cmd_lower.starts_with("git stash") && !cmd_lower.contains("pop") {
-            return "Don't forget to pop your stash when you're ready.".into();
+            return "You had work parked in a git stash.".into();
         }
 
         // Git add
         if cmd_lower.starts_with("git add") {
-            return "Files are staged - commit when ready.".into();
+            return "You had just staged files for a commit.".into();
         }
 
         // Deploy commands
         if cmd_lower.contains("deploy") || cmd_lower.contains("kubectl apply")
             || cmd_lower.contains("fly deploy")
         {
-            return "Verify the deployment landed correctly.".into();
+            return "A deployment was in flight when you left.".into();
         }
 
         // Dev server
         if cmd_lower.contains("dev") && (cmd_lower.contains("run") || cmd_lower.contains("start")) {
-            return "Dev server was running - continue building.".into();
+            return "The dev server was up and you were building against it.".into();
         }
     }
 
-    // Rule 12: Cursor anchor - the sharpest fallback we have
+    // Rule 12: Active file fallback - still an anchor to the user's own position
     if let Some(ref ed) = state.editor {
-        if let Some(ref cursor) = ed.cursor {
-            let name = std::path::Path::new(&cursor.file)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| cursor.file.clone());
-            return format!("Pick up at {}:{} where your cursor was.", name, cursor.line);
-        }
-
-        // Rule 13: Active file fallback
         if let Some(ref active) = ed.active_file {
             let desc = describe_path(active);
             return format!("Continue from {}.", desc.short_name);
         }
     }
 
-    "Pick up where you left off.".into()
+    "You left no half-finished thread on record.".into()
 }
 
 /// Check if a command is a test command

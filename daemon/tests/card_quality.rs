@@ -339,6 +339,286 @@ fn next_step_restores_intent_and_never_coaches() {
     );
 }
 
+/// THE CARD LAW enforcement: a next step restores where you were;
+/// it never orders, coaches, or judges. The only imperatives allowed
+/// are resume anchors to the user's own position.
+fn assert_restores_never_orders(label: &str, next: &str) {
+    let lower = next.to_lowercase();
+    const FORBIDDEN: &[&str] = &[
+        "commit them",
+        "commit when",
+        "commit if",
+        "consider",
+        "don't forget",
+        "make sure",
+        "might be ready",
+        "run the tests",
+        "run tests",
+        "run install",
+        "run it against",
+        "stage your",
+        "then stage",
+        "and commit",
+        "fix the build errors",
+        "verify the",
+        "try again",
+        "continue with your",
+    ];
+    for phrase in FORBIDDEN {
+        assert!(
+            !lower.contains(phrase),
+            "{label}: next step orders/coaches (\"{phrase}\"): {next}"
+        );
+    }
+    const ORDER_STARTERS: &[&str] = &[
+        "run ", "fix ", "stage ", "verify ", "wire ", "commit ", "check ", "don't ",
+        "make ", "add ", "update ", "install ",
+    ];
+    if !(next.starts_with("Pick up at ") || next.starts_with("Continue from ")) {
+        for starter in ORDER_STARTERS {
+            assert!(
+                !lower.starts_with(starter),
+                "{label}: next step opens with an order (\"{starter}\"): {next}"
+            );
+        }
+    }
+}
+
+#[test]
+fn next_step_never_orders_across_the_whole_rule_table() {
+    use revenant::signals::editor::EditorState;
+
+    // One state per predictor rule, none with a cursor anchor, so every
+    // generic branch is held to the law
+    let mut table: Vec<(&str, WorkingState)> = vec![
+        (
+            "test command last, fix in flight",
+            state(
+                "fixer",
+                Some(git_state(
+                    "fix/timer",
+                    "clear the timer on success",
+                    &[("src/timer.rs", ChangeStatus::Modified)],
+                    "unstaged: 1 file changed",
+                )),
+                Some(terminal_state(&["cargo test timer"])),
+            ),
+        ),
+        (
+            "test command last, tree quiet",
+            state("greenish", None, Some(terminal_state(&["cargo test"]))),
+        ),
+        (
+            "staged only, commit in flight",
+            state(
+                "stager",
+                Some(git_state(
+                    "dev",
+                    "utility sweep",
+                    &[
+                        ("src/util/dates.ts", ChangeStatus::Added),
+                        ("src/util/strings.ts", ChangeStatus::Added),
+                    ],
+                    "staged: 2 files changed",
+                )),
+                None,
+            ),
+        ),
+        (
+            "staged plus unstaged test edits",
+            state(
+                "half-staged",
+                Some(git_state(
+                    "dev",
+                    "extract the parser",
+                    &[
+                        ("src/parser.rs", ChangeStatus::Added),
+                        ("tests/parser_test.rs", ChangeStatus::Modified),
+                    ],
+                    "mixed",
+                )),
+                None,
+            ),
+        ),
+        (
+            "unstaged edits with tests present",
+            state(
+                "test-toucher",
+                Some(git_state(
+                    "dev",
+                    "harden the decoder",
+                    &[
+                        ("src/decode.rs", ChangeStatus::Modified),
+                        ("tests/decode_test.rs", ChangeStatus::Modified),
+                    ],
+                    "unstaged: 2 files changed",
+                )),
+                None,
+            ),
+        ),
+        (
+            "single new file being built out",
+            state(
+                "greenfield",
+                Some(git_state(
+                    "feature/export",
+                    "scaffold the exporter",
+                    &[
+                        ("src/export/csv.rs", ChangeStatus::Added),
+                        ("src/export/mod.rs", ChangeStatus::Modified),
+                    ],
+                    "mixed",
+                )),
+                None,
+            ),
+        ),
+        (
+            "dependency manifest edited",
+            state(
+                "dep-shift",
+                Some(git_state(
+                    "dev",
+                    "pull in the retry crate",
+                    &[
+                        ("Cargo.toml", ChangeStatus::Modified),
+                        ("src/net.rs", ChangeStatus::Modified),
+                    ],
+                    "unstaged: 2 files changed",
+                )),
+                None,
+            ),
+        ),
+        (
+            "fresh migration written",
+            state(
+                "migrator",
+                Some(git_state(
+                    "feature/index",
+                    "index the lookups",
+                    &[
+                        ("migrations/0004_add_index.sql", ChangeStatus::Untracked),
+                        ("migrations/0005_backfill.sql", ChangeStatus::Untracked),
+                    ],
+                    "",
+                )),
+                None,
+            ),
+        ),
+        (
+            "feature branch at a clean point",
+            state(
+                "cleanstop",
+                Some(git_state("feature/settled", "land the settlement", &[], "")),
+                None,
+            ),
+        ),
+        (
+            "unstaged only, no tests",
+            state(
+                "loose-edits",
+                Some(git_state(
+                    "dev",
+                    "reword the banner",
+                    &[("src/banner.rs", ChangeStatus::Modified)],
+                    "unstaged: 1 file changed",
+                )),
+                None,
+            ),
+        ),
+        (
+            "build failing in terminal",
+            state(
+                "builder",
+                None,
+                Some(terminal_state(&["cargo build 2>&1 | tee build-errors.log"])),
+            ),
+        ),
+        (
+            "fresh install in terminal",
+            state("installer", None, Some(terminal_state(&["npm install zod"]))),
+        ),
+        (
+            "work parked in a stash",
+            state("stasher", None, Some(terminal_state(&["git stash push -m wip"]))),
+        ),
+        (
+            "files just staged in terminal",
+            state("adder", None, Some(terminal_state(&["git add -A"]))),
+        ),
+        (
+            "deployment in flight",
+            state("shipper", None, Some(terminal_state(&["fly deploy"]))),
+        ),
+        (
+            "dev server running",
+            state("server", None, Some(terminal_state(&["npm run dev"]))),
+        ),
+        ("nothing on record", state("bare", None, None)),
+    ];
+
+    // Active-file fallback: the allowed anchor form without a cursor
+    let mut anchored = state("resumer", None, None);
+    anchored.editor = Some(EditorState {
+        open_files: vec![],
+        active_file: Some("src/resume.rs".into()),
+        active_language: Some("rust".into()),
+        cursor: None,
+    });
+    table.push(("active file fallback", anchored));
+
+    for (label, s) in &table {
+        let card = rule_based_compress(s);
+        assert_restores_never_orders(label, &card.next_step);
+        assert!(!card.next_step.is_empty(), "{label}: empty next step");
+    }
+
+    // The corpus is held to the same law
+    for (label, s, _) in corpus() {
+        let card = rule_based_compress(&s);
+        assert_restores_never_orders(label, &card.next_step);
+    }
+}
+
+#[test]
+fn cursor_anchor_outranks_the_staged_commit_hint() {
+    use revenant::signals::editor::{CursorAnchor, EditorState};
+
+    // The 2026-07-24 banner: staged-only git state used to beat the
+    // cursor anchor and told the user to commit. The anchor is the
+    // sharpest signal of where the hands were; it wins over ALL git
+    // state, not just the hints that happened to sit below it.
+    let mut s = state(
+        "awatum",
+        Some(git_state(
+            "dev",
+            "utility sweep",
+            &[
+                ("src/lib/dates.ts", ChangeStatus::Added),
+                ("src/lib/strings.ts", ChangeStatus::Added),
+            ],
+            "staged: 2 files changed",
+        )),
+        None,
+    );
+    s.editor = Some(EditorState {
+        open_files: vec![],
+        active_file: Some("src/lib/dates.ts".into()),
+        active_language: Some("typescript".into()),
+        cursor: Some(CursorAnchor {
+            file: "/tmp/corpus/awatum/src/lib/dates.ts".into(),
+            line: 142,
+        }),
+    });
+
+    let card = rule_based_compress(&s);
+    assert!(
+        card.next_step.contains("dates.ts:142"),
+        "cursor anchor must outrank the staged-changes rule, got: {}",
+        card.next_step
+    );
+    assert_restores_never_orders("staged with anchor", &card.next_step);
+}
+
 #[test]
 fn empty_signals_still_produce_a_safe_card() {
     // A project with no git, no terminal, no editor: the card must not
