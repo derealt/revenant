@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::config::RevenantConfig;
-use crate::detector::{SwitchDetector, SwitchEvent, SwitchKind};
+use crate::detector::{ReturnCause, SwitchDetector, SwitchEvent, SwitchKind};
 use std::sync::Arc;
 
 /// Run the file watcher, sending activity signals to the switch detector
@@ -144,12 +144,21 @@ pub async fn run_watcher(
                                     .await;
                             }
 
-                            // Return to new project - carry where we came from
+                            // Return to new project - carry where we came
+                            // from. A machine absence outranks the hop as
+                            // the cause: waking into a different project
+                            // is still a machine return.
+                            let cause = if was_absent {
+                                ReturnCause::MachineReturn
+                            } else {
+                                ReturnCause::ProjectSwitch
+                            };
                             let _ = switch_tx
                                 .send(SwitchEvent {
                                     kind: SwitchKind::Return {
                                         project_dir: project_str.clone(),
                                         from_project: from,
+                                        cause,
                                     },
                                     timestamp: chrono::Utc::now(),
                                 })
@@ -174,12 +183,15 @@ pub async fn run_watcher(
                                     .await;
                             }
 
-                            // Then trigger return
+                            // Then trigger return - the whole machine was
+                            // away, so this is the cause that wakes the
+                            // push channels
                             let _ = switch_tx
                                 .send(SwitchEvent {
                                     kind: SwitchKind::Return {
                                         project_dir: project_str.clone(),
                                         from_project: None,
+                                        cause: ReturnCause::MachineReturn,
                                     },
                                     timestamp: chrono::Utc::now(),
                                 })

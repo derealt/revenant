@@ -137,14 +137,23 @@ pub struct BrowserGhostConfig {
     /// off after 1 minute by default; raise this to keep it longer.
     #[serde(default = "default_banner_seconds")]
     pub banner_seconds: u64,
+    /// THE QUIET LAW: the banner pushes into a surface the user is
+    /// actively using, so by default it only wakes when the user just
+    /// returned to the machine (sleep or a long gap in all activity),
+    /// never on mid-flow project hops or branch switches. Set false to
+    /// restore the old every-return behavior.
+    #[serde(default = "default_machine_return_only")]
+    pub machine_return_only: bool,
 }
 
 fn default_banner_seconds() -> u64 { 60 }
+fn default_machine_return_only() -> bool { true }
 
 impl Default for BrowserGhostConfig {
     fn default() -> Self {
         Self {
             banner_seconds: default_banner_seconds(),
+            machine_return_only: default_machine_return_only(),
         }
     }
 }

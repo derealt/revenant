@@ -93,6 +93,10 @@ socket_path = "~/.revenant/vscode.sock"
 # How long the browser banner stays up (seconds). It goes off after
 # 1 minute by default; raise this if you want it to linger.
 banner_seconds = 60
+# The quiet law: the banner only wakes when you just came back to the
+# machine (sleep, or a long gap in all activity) - never on mid-flow
+# project hops or branch switches. Set false for the old behavior.
+machine_return_only = true
 
 [ghosts.obsidian]
 # Vault path

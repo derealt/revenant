@@ -30,9 +30,37 @@ pub enum SwitchKind {
         project_dir: String,
         /// Which project the user came from (if this was a project switch)
         from_project: Option<String>,
+        /// Why this counts as a return - decides which channels wake
+        cause: ReturnCause,
     },
     /// Activity timeout - user has been back long enough, clear ghosts
     Timeout,
+}
+
+/// Why a Return happened. Push surfaces (the browser banner) only wake
+/// for a machine return; everything else is mid-flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReturnCause {
+    /// The machine itself was away - sleep, or a long gap in ALL
+    /// activity - and the user just came back
+    MachineReturn,
+    /// A hop between projects while actively working
+    ProjectSwitch,
+    /// A branch switch inside the active project
+    BranchChange,
+    /// A new shell asked "where was I" with no machine absence
+    ShellOpen,
+}
+
+impl ReturnCause {
+    /// THE QUIET LAW (Toyin, 2026-07-24): the browser banner pushes
+    /// into a surface the user is actively using, so it speaks only
+    /// when the user just came back to the machine. Mid-flow project
+    /// hops, branch flits, and shell opens stay off it. The terminal
+    /// keeps its own covenant (a new shell is a pull, not a push).
+    pub fn wakes_browser(&self, machine_return_only: bool) -> bool {
+        !machine_return_only || matches!(self, ReturnCause::MachineReturn)
+    }
 }
 
 /// Per-project tracking state
@@ -56,6 +84,10 @@ pub struct SwitchDetector {
     projects: Mutex<HashMap<String, ProjectTracker>>,
     /// Currently active project
     active_project: Mutex<Option<String>>,
+    /// Last activity anywhere on the machine. Wall clock (SystemTime)
+    /// so sleep counts. None until the first activity after daemon
+    /// start - a fresh daemon must not read as a machine absence.
+    last_global_activity: Mutex<Option<std::time::SystemTime>>,
 }
 
 impl SwitchDetector {
@@ -67,12 +99,28 @@ impl SwitchDetector {
             ghost_ttl: std::time::Duration::from_secs(config.daemon.ghost_ttl_minutes * 60),
             projects: Mutex::new(HashMap::new()),
             active_project: Mutex::new(None),
+            last_global_activity: Mutex::new(None),
         }
+    }
+
+    /// True when there was no activity anywhere on the machine for
+    /// longer than the absence threshold. Advances the global clock.
+    fn machine_was_absent(&self, now: std::time::SystemTime) -> bool {
+        let mut global = match self.last_global_activity.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let absent = global
+            .map(|t| now.duration_since(t).unwrap_or_default() > self.absence_threshold)
+            .unwrap_or(false);
+        *global = Some(now);
+        absent
     }
 
     /// Record activity in a project, return switch event if context changed
     pub fn record_activity(&self, project_dir: &str) -> Option<SwitchEvent> {
         let now = std::time::SystemTime::now();
+        let machine_absent = self.machine_was_absent(now);
         let mut projects = self.projects.lock().ok()?;
         let mut active = self.active_project.lock().ok()?;
 
@@ -104,13 +152,21 @@ impl SwitchDetector {
         tracker.last_activity = now;
         *active = Some(project_dir.to_string());
 
-        // Determine event
+        // Determine event. A machine absence outranks the hop as the
+        // cause: coming back from sleep into a different project is
+        // still a machine return.
+        let cause = if machine_absent {
+            ReturnCause::MachineReturn
+        } else {
+            ReturnCause::ProjectSwitch
+        };
         if switched_from.is_some() {
             // Project switch - departure from old, return to new
             Some(SwitchEvent {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
                     from_project: switched_from,
+                    cause,
                 },
                 timestamp: Utc::now(),
             })
@@ -120,6 +176,7 @@ impl SwitchDetector {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
                     from_project: None,
+                    cause,
                 },
                 timestamp: Utc::now(),
             })
@@ -135,6 +192,7 @@ impl SwitchDetector {
     /// silent.
     pub fn shell_opened(&self, project_dir: &str) -> Option<SwitchEvent> {
         let now = std::time::SystemTime::now();
+        let machine_absent = self.machine_was_absent(now);
         let mut projects = self.projects.lock().ok()?;
         let mut active = self.active_project.lock().ok()?;
 
@@ -167,11 +225,20 @@ impl SwitchDetector {
         }
         *active = Some(project_dir.to_string());
 
+        // A shell open is a pull on the terminal channel; it only
+        // counts as a machine return for the push channels when the
+        // whole machine was actually away
+        let cause = if machine_absent {
+            ReturnCause::MachineReturn
+        } else {
+            ReturnCause::ShellOpen
+        };
         if switched_from.is_some() {
             Some(SwitchEvent {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
                     from_project: switched_from,
+                    cause,
                 },
                 timestamp: Utc::now(),
             })
@@ -180,6 +247,7 @@ impl SwitchDetector {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
                     from_project: None,
+                    cause,
                 },
                 timestamp: Utc::now(),
             })
@@ -249,6 +317,7 @@ impl SwitchDetector {
                 kind: SwitchKind::Return {
                     project_dir: project_dir.to_string(),
                     from_project: None,
+                    cause: ReturnCause::BranchChange,
                 },
                 timestamp: Utc::now(),
             })

@@ -242,7 +242,7 @@ async fn main() -> Result<()> {
                         Err(e) => warn!("snapshot capture failed: {e}"),
                     }
                 }
-                SwitchKind::Return { project_dir, from_project } => {
+                SwitchKind::Return { project_dir, from_project, cause } => {
                     // User returned - load card, dispatch ghosts
                     match d.store.latest_card(&project_dir) {
                         Ok(Some(mut card)) => {
@@ -257,20 +257,28 @@ async fn main() -> Result<()> {
                             }
 
                             info!("restoring ghost for {} - {}", card.project_dir, card.summary);
-                            // Update HTTP server for browser extension
-                            let card_json = serde_json::json!({
-                                "type": "inject",
-                                "card": {
-                                    "id": card.id,
-                                    "summary": card.summary,
-                                    "next_step": card.next_step,
-                                    "project_dir": card.project_dir,
-                                    "project_name": card.project_dir.split('/').last().unwrap_or("unknown"),
-                                    "ttl_seconds": card.ttl_seconds,
-                                    "from_project": from_project.as_deref().and_then(|p| p.rsplit('/').next()),
-                                }
-                            });
-                            ghost_http.inject(serde_json::to_string(&card_json).unwrap_or_default());
+                            // THE QUIET LAW: the browser banner is a push
+                            // into a surface the user is actively using;
+                            // it only wakes on a machine return
+                            if cause.wakes_browser(
+                                d.config.ghosts.browser_config.machine_return_only,
+                            ) {
+                                let card_json = serde_json::json!({
+                                    "type": "inject",
+                                    "card": {
+                                        "id": card.id,
+                                        "summary": card.summary,
+                                        "next_step": card.next_step,
+                                        "project_dir": card.project_dir,
+                                        "project_name": card.project_dir.split('/').last().unwrap_or("unknown"),
+                                        "ttl_seconds": card.ttl_seconds,
+                                        "from_project": from_project.as_deref().and_then(|p| p.rsplit('/').next()),
+                                    }
+                                });
+                                ghost_http.inject(serde_json::to_string(&card_json).unwrap_or_default());
+                            } else {
+                                info!("browser banner stays quiet ({cause:?})");
+                            }
                             if let Err(e) = d.dispatcher.dispatch(&card).await {
                                 error!("ghost dispatch failed: {e}");
                             } else {

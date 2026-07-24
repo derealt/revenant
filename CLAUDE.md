@@ -38,7 +38,7 @@ REVENANT doesn't reduce context switches. It makes each one cost zero.
   - **VS Code**: Extension inserts a transient inline decoration (not a real comment - a visual overlay that doesn't modify the file)
   - **Terminal**: Every new shell POSTs its cwd to the daemon's `/shell-open` endpoint and is ALWAYS answered with the latest card, rendered as MOTD text: opening a terminal is asking "where was I?". The daemon's absence rules decide only the second question: whether that shell-open also counts as a return that wakes the other ghost channels. `~/.revenant/motd` remains as the live-ghost window and the fallback when the daemon is unreachable.
   - **Slack**: Go sidecar posts ephemeral message (visible only to you)
-  - **Browser**: Extension polls the daemon's localhost HTTP server and shows a subtle banner
+  - **Browser**: Extension polls the daemon's localhost HTTP server and shows a subtle banner. THE QUIET LAW: the banner is a push into a surface you are actively using, so it only wakes on a machine return (sleep, or a long gap in all activity) - never on mid-flow project hops or branch switches (`machine_return_only` in config, default true)
   - **Obsidian**: Plugin polls a state file and injects a transient callout block
 - **Storage**: SQLite - context cards indexed by project directory, timestamped, auto-pruned after 30 days
 - **Config**: TOML at `~/.config/revenant/config.toml`

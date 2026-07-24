@@ -14,7 +14,7 @@ use std::process::Command;
 
 use revenant::compressor::rule_based_compress;
 use revenant::config::{RevenantConfig, TerminalGhostConfig, TerminalSignalConfig};
-use revenant::detector::{SwitchDetector, SwitchKind};
+use revenant::detector::{ReturnCause, SwitchDetector, SwitchKind};
 use revenant::ghost::terminal::TerminalGhost;
 use revenant::signals::{git, terminal};
 use revenant::snapshot::{SnapshotAggregator, WorkingState};
@@ -355,7 +355,8 @@ fn detector_emits_return_on_project_switch() {
     // Continued activity in the same project: no switch
     assert!(detector.record_activity("/tmp/project-a").is_none());
 
-    // Hopping to another project: Return carrying the origin
+    // Hopping to another project: Return carrying the origin, and a
+    // mid-flow cause that keeps the browser quiet
     let event = detector
         .record_activity("/tmp/project-b")
         .expect("project hop must emit a switch event");
@@ -363,9 +364,11 @@ fn detector_emits_return_on_project_switch() {
         SwitchKind::Return {
             project_dir,
             from_project,
+            cause,
         } => {
             assert_eq!(project_dir, "/tmp/project-b");
             assert_eq!(from_project.as_deref(), Some("/tmp/project-a"));
+            assert_eq!(cause, ReturnCause::ProjectSwitch);
         }
         other => panic!("expected Return, got {other:?}"),
     }
@@ -406,7 +409,8 @@ fn detector_shell_open_gates_on_absence() {
     assert!(detector.shell_opened("/tmp/shell-a").is_none());
 
     // A shell opening on a different project is a switch: the Return
-    // carries the origin, like the watcher's project-hop path
+    // carries the origin, like the watcher's project-hop path - but
+    // with no machine absence its cause keeps the push channels quiet
     let event = detector
         .shell_opened("/tmp/shell-b")
         .expect("project hop via shell must summon a ghost");
@@ -414,9 +418,11 @@ fn detector_shell_open_gates_on_absence() {
         SwitchKind::Return {
             project_dir,
             from_project,
+            cause,
         } => {
             assert_eq!(project_dir, "/tmp/shell-b");
             assert_eq!(from_project.as_deref(), Some("/tmp/shell-a"));
+            assert_eq!(cause, ReturnCause::ShellOpen);
         }
         other => panic!("expected Return, got {other:?}"),
     }
@@ -435,7 +441,57 @@ fn detector_shell_open_returns_after_absence() {
         .shell_opened("/tmp/shell-c")
         .expect("a shell after an absence must summon a ghost");
     match event.kind {
-        SwitchKind::Return { from_project, .. } => assert!(from_project.is_none()),
+        SwitchKind::Return { from_project, cause, .. } => {
+            assert!(from_project.is_none());
+            // The whole machine was away: this return wakes everything
+            assert_eq!(cause, ReturnCause::MachineReturn);
+        }
+        other => panic!("expected Return, got {other:?}"),
+    }
+}
+
+#[test]
+fn browser_wakes_only_on_machine_return() {
+    // THE QUIET LAW (2026-07-24): the browser banner pushes into a
+    // surface the user is actively using, so it speaks only when the
+    // user just came back to the machine. Mid-flow hops, branch flits
+    // and shell opens stay off it; the terminal keeps its covenant.
+    assert!(ReturnCause::MachineReturn.wakes_browser(true));
+    assert!(!ReturnCause::ProjectSwitch.wakes_browser(true));
+    assert!(!ReturnCause::BranchChange.wakes_browser(true));
+    assert!(!ReturnCause::ShellOpen.wakes_browser(true));
+    // Config escape hatch restores the old every-return behavior
+    assert!(ReturnCause::ProjectSwitch.wakes_browser(false));
+    // The default config keeps the law on
+    assert!(RevenantConfig::default().ghosts.browser_config.machine_return_only);
+
+    // A branch change carries its quiet cause end to end
+    let detector = SwitchDetector::new(&RevenantConfig::default());
+    detector.record_activity("/tmp/quiet-a");
+    detector.check_branch_change("/tmp/quiet-a", "main");
+    let event = detector
+        .check_branch_change("/tmp/quiet-a", "feature/x")
+        .expect("branch change must emit a switch event");
+    match event.kind {
+        SwitchKind::Return { cause, .. } => assert_eq!(cause, ReturnCause::BranchChange),
+        other => panic!("expected Return, got {other:?}"),
+    }
+
+    // A machine absence outranks the hop: waking into a DIFFERENT
+    // project is still a machine return and deserves the banner
+    let mut config = RevenantConfig::default();
+    config.daemon.absence_threshold_minutes = 0;
+    let detector = SwitchDetector::new(&config);
+    detector.record_activity("/tmp/quiet-b");
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let event = detector
+        .record_activity("/tmp/quiet-c")
+        .expect("hop after machine absence must emit a switch event");
+    match event.kind {
+        SwitchKind::Return { from_project, cause, .. } => {
+            assert_eq!(from_project.as_deref(), Some("/tmp/quiet-b"));
+            assert_eq!(cause, ReturnCause::MachineReturn);
+        }
         other => panic!("expected Return, got {other:?}"),
     }
 }
