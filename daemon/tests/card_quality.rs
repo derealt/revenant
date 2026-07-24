@@ -620,6 +620,109 @@ fn cursor_anchor_outranks_the_staged_commit_hint() {
 }
 
 #[test]
+fn cards_name_real_files_never_taxonomy_labels() {
+    use revenant::signals::editor::{CursorAnchor, EditorState};
+
+    // The 2026-07-24 banner: "editing utility code in Awatum" about a
+    // real file under lib/. The card must speak the file's own name;
+    // the folder taxonomy may count clusters but never eat the name.
+    let mut s = state(
+        "awatum",
+        Some(git_state(
+            "dev",
+            "",
+            &[("src/lib/reportBuilder.ts", ChangeStatus::Modified)],
+            "unstaged: 1 file changed, 12 insertions(+)",
+        )),
+        None,
+    );
+    s.editor = Some(EditorState {
+        open_files: vec![],
+        active_file: Some("src/lib/reportBuilder.ts".into()),
+        active_language: Some("typescript".into()),
+        cursor: Some(CursorAnchor {
+            file: "/tmp/corpus/awatum/src/lib/reportBuilder.ts".into(),
+            line: 12,
+        }),
+    });
+    let card = rule_based_compress(&s);
+    let banner_card = format!("{} {}", card.summary, card.next_step);
+    assert!(
+        banner_card.contains("reportBuilder.ts"),
+        "card must name the real file, got: {banner_card}"
+    );
+
+    const DEAD_LABELS: &[&str] = &[
+        "utility code",
+        "data models",
+        "state management",
+        "api endpoints",
+        "ui components",
+        "service layer",
+        "agent modules",
+        "schema definitions",
+        "payment logic",
+        "websocket code",
+        "background jobs",
+        "signal modules",
+        "ghost injectors",
+        "database migrations",
+    ];
+    let mut all_cards: Vec<String> = corpus()
+        .into_iter()
+        .map(|(_, s, _)| {
+            let c = rule_based_compress(&s);
+            format!("{} {}", c.summary, c.next_step)
+        })
+        .collect();
+    all_cards.push(banner_card);
+    for text in &all_cards {
+        let lower = text.to_lowercase();
+        for label in DEAD_LABELS {
+            assert!(
+                !lower.contains(label),
+                "taxonomy label \"{label}\" leaked into a card: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn summaries_never_stack_gerunds() {
+    // "you were deploying bumping to v2.4.0": an intent verb must never
+    // be glued in front of a rewrite that carries its own gerund. The
+    // topic seam strips the rewrite's gerund; every summary path must
+    // go through it.
+    const VERB_GERUNDS: &[&str] = &[
+        "fixing", "adding", "updating", "refactoring", "removing", "merging",
+        "testing", "bumping", "reverting", "setting", "implementing",
+        "reorganizing", "working", "creating", "improving", "enabling",
+        "disabling", "deploying", "editing", "documenting", "exploring",
+        "reviewing", "building", "debugging", "clearing", "extracting",
+        "rewriting", "importing", "releasing",
+    ];
+    for (label, s, _) in corpus() {
+        let card = rule_based_compress(&s);
+        let words: Vec<String> = card
+            .summary
+            .to_lowercase()
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string())
+            .collect();
+        for pair in words.windows(2) {
+            assert!(
+                !(VERB_GERUNDS.contains(&pair[0].as_str())
+                    && VERB_GERUNDS.contains(&pair[1].as_str())),
+                "{label}: stacked gerunds \"{} {}\" in: {}",
+                pair[0],
+                pair[1],
+                card.summary
+            );
+        }
+    }
+}
+
+#[test]
 fn empty_signals_still_produce_a_safe_card() {
     // A project with no git, no terminal, no editor: the card must not
     // panic and must not fabricate specifics it cannot know

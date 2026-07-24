@@ -212,252 +212,177 @@ struct PathDescription {
     category: &'static str,
 }
 
-/// Map a file path to a human-readable description
+/// Map a file path to a human-readable description.
+/// THE NAMING LAW: short_name always carries the file's OWN name -
+/// the real, greppable handle ("compressor.rs", "export/mod.rs").
+/// The folder taxonomy only sets the category used when clusters are
+/// counted ("5 tests, 3 utilities"); it never replaces the name. The
+/// old vocabulary traded the one concrete fact for a category label
+/// ("utility code", "data models") and produced cards that named
+/// nothing the user could grep for.
 fn describe_path(path: &str) -> PathDescription {
-    let lower = path.to_lowercase();
     let filename = path.rsplit('/').next().unwrap_or(path);
-    let filename_lower = filename.to_lowercase();
+    PathDescription {
+        short_name: specific_file_name(path, filename),
+        category: categorize_path(path, filename),
+    }
+}
 
-    // Check extension first
+/// The file's own name; prefixed with its meaningful parent directory
+/// only when the bare name says nothing ("mod.rs", "index.ts").
+fn specific_file_name(path: &str, filename: &str) -> String {
+    let stem = filename.split('.').next().unwrap_or(filename).to_lowercase();
+    let bare_name_is_empty = matches!(
+        stem.as_str(),
+        "" | "mod" | "index" | "main" | "lib" | "init" | "__init__"
+    );
+    if !bare_name_is_empty {
+        return filename.to_string();
+    }
+    if let Some(parent) = meaningful_parent(path) {
+        return format!("{parent}/{filename}");
+    }
+    filename.to_string()
+}
+
+/// First parent directory that says something ("src", "lib" and
+/// friends say nothing)
+fn meaningful_parent(path: &str) -> Option<&str> {
+    let segments: Vec<&str> = path.split('/').collect();
+    segments
+        .iter()
+        .rev()
+        .skip(1)
+        .find(|seg| {
+            !matches!(
+                seg.to_lowercase().as_str(),
+                "src" | "lib" | "app" | "main" | "core" | "internal" | "pkg"
+                    | "cmd" | "build" | "dist" | "out" | "target" | "node_modules"
+                    | "." | ".." | ""
+            )
+        })
+        .copied()
+}
+
+/// Classify a path into the category vocabulary used for cluster
+/// counting. Categories describe GROUPS; single files keep their name.
+fn categorize_path(path: &str, filename: &str) -> &'static str {
+    let lower = path.to_lowercase();
+    let filename_lower = filename.to_lowercase();
     let ext = filename.rsplit('.').next().unwrap_or("");
 
     // Special files
-    if filename_lower == "package.json" {
-        return PathDescription { short_name: "package.json".into(), category: "config" };
-    }
-    if filename_lower == "cargo.toml" {
-        return PathDescription { short_name: "Cargo.toml".into(), category: "config" };
+    if filename_lower == "package.json" || filename_lower == "cargo.toml"
+        || filename_lower == "tsconfig.json" || filename_lower == "tsconfig.build.json"
+        || filename_lower == ".env" || filename_lower.starts_with(".env.")
+    {
+        return "config";
     }
     if filename_lower == "dockerfile" || filename_lower.starts_with("docker-compose") {
-        return PathDescription { short_name: filename.into(), category: "infra" };
-    }
-    if filename_lower == "tsconfig.json" || filename_lower == "tsconfig.build.json" {
-        return PathDescription { short_name: "TypeScript config".into(), category: "config" };
-    }
-    if filename_lower == ".env" || filename_lower.starts_with(".env.") {
-        return PathDescription { short_name: "environment config".into(), category: "config" };
+        return "infra";
     }
     if filename_lower == "makefile" || filename_lower == "justfile" {
-        return PathDescription { short_name: filename.into(), category: "build" };
+        return "build";
     }
     if filename_lower == "readme.md" || filename_lower == "claude.md" {
-        return PathDescription { short_name: filename.into(), category: "docs" };
+        return "docs";
     }
 
     // Directory-based patterns
-
-    // Test files
     if lower.contains("/test/") || lower.contains("/tests/") || lower.contains("/__tests__/")
         || lower.contains("/spec/") || filename_lower.contains(".test.")
         || filename_lower.contains(".spec.") || filename_lower.contains("_test.")
         || filename_lower.starts_with("test_")
     {
-        let domain = infer_domain_from_path(path);
-        let name = if let Some(d) = domain {
-            format!("{d} tests")
-        } else {
-            "tests".into()
-        };
-        return PathDescription { short_name: name, category: "test" };
+        return "test";
     }
-
-    // Migration files
     if lower.contains("/migration") || lower.contains("/migrate") {
-        return PathDescription { short_name: "database migrations".into(), category: "database" };
+        return "database";
     }
-
-    // API/route files
     if lower.contains("/api/") || lower.contains("/routes/") || lower.contains("/endpoints/")
         || lower.contains("/handlers/") || lower.contains("/controllers/")
     {
-        let domain = infer_domain_from_filename(filename);
-        let name = if let Some(d) = domain {
-            format!("the {d} API")
-        } else {
-            "API endpoints".into()
-        };
-        return PathDescription { short_name: name, category: "api" };
+        return "api";
     }
-
-    // Component files
     if lower.contains("/components/") || lower.contains("/views/") || lower.contains("/pages/") {
-        let domain = infer_domain_from_filename(filename);
-        let name = if let Some(d) = domain {
-            format!("the {d} component")
-        } else {
-            "UI components".into()
-        };
-        return PathDescription { short_name: name, category: "ui" };
+        return "ui";
     }
-
-    // Service/module files
     if lower.contains("/services/") || lower.contains("/service/") {
-        let domain = infer_domain_from_filename(filename);
-        let name = if let Some(d) = domain {
-            format!("the {d} service")
-        } else {
-            "service layer".into()
-        };
-        return PathDescription { short_name: name, category: "service" };
+        return "service";
     }
-
-    // Agent files
     if lower.contains("/agents/") || lower.contains("/agent/") {
-        let domain = infer_domain_from_filename(filename);
-        let name = if let Some(d) = domain {
-            format!("the {d} agent")
-        } else {
-            "agent modules".into()
-        };
-        return PathDescription { short_name: name, category: "agent" };
+        return "agent";
     }
-
-    // Model/schema files
     if lower.contains("/models/") || lower.contains("/schema/") || lower.contains("/schemas/")
         || lower.contains("/entities/") || lower.contains("/types/")
     {
-        return PathDescription { short_name: "data models".into(), category: "model" };
+        return "model";
     }
-
-    // Middleware
     if lower.contains("/middleware/") {
-        return PathDescription { short_name: "middleware".into(), category: "middleware" };
+        return "middleware";
     }
-
-    // Utils/helpers
     if lower.contains("/utils/") || lower.contains("/helpers/") || lower.contains("/lib/") {
-        return PathDescription { short_name: "utility code".into(), category: "util" };
+        return "util";
     }
-
-    // Config directories
     if lower.contains("/config/") || lower.contains("/configs/") {
-        return PathDescription { short_name: "configuration".into(), category: "config" };
+        return "config";
     }
-
-    // CI/CD
     if lower.contains("/.github/") || lower.contains("/.gitlab") || lower.contains("/ci/")
         || lower.contains("/.circleci")
     {
-        return PathDescription { short_name: "CI/CD pipeline".into(), category: "infra" };
+        return "infra";
     }
-
-    // Hooks
     if lower.contains("/hooks/") {
-        return PathDescription { short_name: "hooks".into(), category: "hooks" };
+        return "hooks";
     }
-
-    // Store/state management
     if lower.contains("/store/") || lower.contains("/stores/") || lower.contains("/state/")
         || lower.contains("/redux/") || lower.contains("/zustand/")
     {
-        return PathDescription { short_name: "state management".into(), category: "state" };
+        return "state";
     }
-
-    // Styles
     if ext == "css" || ext == "scss" || ext == "sass" || ext == "less" || ext == "styl" {
-        return PathDescription { short_name: "styles".into(), category: "style" };
+        return "style";
     }
-
-    // Docs
     if ext == "md" || ext == "rst" || ext == "adoc" || lower.contains("/docs/") || lower.contains("/doc/") {
-        return PathDescription { short_name: "documentation".into(), category: "docs" };
+        return "docs";
     }
-
-    // SQL
     if ext == "sql" {
-        return PathDescription { short_name: "SQL queries".into(), category: "database" };
+        return "database";
     }
-
-    // Proto/GraphQL
     if ext == "proto" || ext == "graphql" || ext == "gql" {
-        return PathDescription { short_name: "schema definitions".into(), category: "schema" };
+        return "schema";
     }
-
-    // Scripts
     if ext == "sh" || ext == "bash" || ext == "zsh" || ext == "fish"
         || lower.contains("/scripts/") || lower.contains("/bin/")
     {
-        return PathDescription { short_name: "scripts".into(), category: "script" };
+        return "script";
     }
-
-    // WebSocket patterns
     if lower.contains("/ws/") || lower.contains("/websocket/") || lower.contains("/socket/") {
-        return PathDescription { short_name: "WebSocket code".into(), category: "networking" };
+        return "networking";
     }
-
-    // Auth patterns
     if lower.contains("/auth/") || lower.contains("/authentication/") || lower.contains("/login/") {
-        return PathDescription { short_name: "authentication".into(), category: "auth" };
+        return "auth";
     }
-
-    // Payment
     if lower.contains("/payment/") || lower.contains("/billing/") || lower.contains("/stripe/") {
-        return PathDescription { short_name: "payment logic".into(), category: "payment" };
+        return "payment";
     }
-
-    // Email/notifications
     if lower.contains("/email/") || lower.contains("/mail/") || lower.contains("/notification/") {
-        return PathDescription { short_name: "notifications".into(), category: "notification" };
+        return "notification";
     }
-
-    // Cron/jobs
     if lower.contains("/jobs/") || lower.contains("/cron/") || lower.contains("/workers/")
         || lower.contains("/queues/") || lower.contains("/tasks/")
     {
-        return PathDescription { short_name: "background jobs".into(), category: "worker" };
+        return "worker";
     }
-
-    // Signals directory (revenant-specific)
+    // Revenant-specific directories
     if lower.contains("/signals/") {
-        return PathDescription { short_name: "signal modules".into(), category: "signal" };
+        return "signal";
     }
-
-    // Ghost directory (revenant-specific)
     if lower.contains("/ghost/") || lower.contains("/ghosts/") {
-        return PathDescription { short_name: "ghost injectors".into(), category: "ghost" };
+        return "ghost";
     }
 
-    // Fallback: use the directory name + filename
-    let dir_domain = infer_domain_from_path(path);
-    let stem = filename.rsplit('.').last().unwrap_or(filename);
-    let name = if let Some(d) = dir_domain {
-        format!("{d}/{stem}")
-    } else {
-        stem.to_string()
-    };
-
-    PathDescription { short_name: name, category: "code" }
-}
-
-/// Try to extract a human-readable domain from the parent directory
-fn infer_domain_from_path(path: &str) -> Option<String> {
-    let segments: Vec<&str> = path.split('/').collect();
-    // Walk backwards, skip the filename, find the first meaningful directory
-    for seg in segments.iter().rev().skip(1) {
-        let s = seg.to_lowercase();
-        // Skip generic directories
-        if matches!(s.as_str(), "src" | "lib" | "app" | "main" | "core" | "internal"
-            | "pkg" | "cmd" | "build" | "dist" | "out" | "target" | "node_modules"
-            | "." | ".." | "")
-        {
-            continue;
-        }
-        return Some(humanize_segment(seg));
-    }
-    None
-}
-
-/// Try to extract a domain from a filename (strip extension, convert casing)
-fn infer_domain_from_filename(filename: &str) -> Option<String> {
-    let stem = if let Some(pos) = filename.find('.') {
-        &filename[..pos]
-    } else {
-        filename
-    };
-    if stem.is_empty() || stem == "index" || stem == "mod" || stem == "main" || stem == "lib" {
-        return None;
-    }
-    Some(humanize_segment(stem))
+    "code"
 }
 
 /// Convert a code segment like "userAuth" or "web-socket" to "user auth" / "web socket"
@@ -1549,12 +1474,24 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
             // Good content but missing project name
             format!("In {}: {}", state.project_name, s)
         } else {
-            // Thin summary - build a reliable one from raw signals
-            let mut parts = vec![format!("{} in {}", temporal, state.project_name)];
-            if !commit_context.is_empty() {
-                parts.push(format!("you were {} {}", intent.verb(), commit_context));
+            // Thin summary - build a reliable one from raw signals.
+            // ONE topic seam: extract_topic already ships the topic
+            // object-shaped (the rewrite's own gerund stripped), so the
+            // intent verb can never stack ("deploying bumping to v2.4.0").
+            // Never re-derive the activity from the raw commit here.
+            let mut parts = Vec::new();
+            if !topic.is_empty() && topic != state.project_name {
+                parts.push(format!(
+                    "{} {} {} in {}",
+                    temporal, intent.verb(), topic, state.project_name
+                ));
             } else if !active_file.is_empty() {
-                parts.push(format!("you were editing {}", active_file));
+                parts.push(format!(
+                    "{} editing {} in {}",
+                    temporal, active_file, state.project_name
+                ));
+            } else {
+                parts.push(format!("{} in {}", temporal, state.project_name));
             }
             if !cluster.is_empty() {
                 parts.push(cluster.clone());
@@ -1908,26 +1845,48 @@ mod tests {
     fn test_describe_path_components() {
         let desc = describe_path("src/components/UserProfile.tsx");
         assert_eq!(desc.category, "ui");
-        assert!(desc.short_name.contains("user profile"));
+        assert_eq!(desc.short_name, "UserProfile.tsx");
     }
 
     #[test]
     fn test_describe_path_tests() {
         let desc = describe_path("src/api/__tests__/auth.test.ts");
         assert_eq!(desc.category, "test");
+        assert_eq!(desc.short_name, "auth.test.ts");
     }
 
     #[test]
     fn test_describe_path_api() {
         let desc = describe_path("src/api/payments.ts");
         assert_eq!(desc.category, "api");
-        assert!(desc.short_name.contains("payment"));
+        assert_eq!(desc.short_name, "payments.ts");
     }
 
     #[test]
     fn test_describe_path_migration() {
         let desc = describe_path("db/migrations/001_create_users.sql");
         assert_eq!(desc.category, "database");
+        assert_eq!(desc.short_name, "001_create_users.sql");
+    }
+
+    #[test]
+    fn test_describe_path_never_erases_the_name() {
+        // The 2026-07-24 banner said "editing utility code" about a
+        // real file under lib/: the taxonomy must never eat the name
+        let desc = describe_path("src/lib/dates.ts");
+        assert_eq!(desc.category, "util");
+        assert_eq!(desc.short_name, "dates.ts");
+
+        // A generic filename borrows its meaningful parent
+        let desc = describe_path("src/export/mod.rs");
+        assert_eq!(desc.short_name, "export/mod.rs");
+        let desc = describe_path("daemon/src/main.rs");
+        assert_eq!(desc.short_name, "daemon/main.rs");
+
+        // Special config files keep their real names too
+        let desc = describe_path("web/tsconfig.json");
+        assert_eq!(desc.category, "config");
+        assert_eq!(desc.short_name, "tsconfig.json");
     }
 
     #[test]
