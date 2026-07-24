@@ -11,7 +11,7 @@ When you return, the context card doesn't appear in a separate app. It appears a
 - A motd in your terminal: `# You were here 4hrs ago. Last: running integration tests, 2 failing in payments module. Hypothesis: decimal rounding.`
 - A pinned message in your project's Slack channel (if configured): `Picked up where you left: the API rate limiter was hitting false positives on burst traffic. You were reading the token bucket implementation.`
 
-The ghost annotations self-destruct after you've been active for 5 minutes. They exist only long enough to bridge the gap. Then they vanish, because you don't need them anymore - you're back in flow.
+The ghost annotations self-destruct after a minute by default (the transience law; raisable per channel). They exist only long enough to bridge the gap. Then they vanish, because you don't need them anymore - you're back in flow.
 
 ## Why This Doesn't Exist
 
@@ -107,12 +107,15 @@ revenant/
 - **ContextCard** - 2-3 sentence natural language summary: what you were doing + what's next
 - **Ghost** - a transient annotation injected into a tool, carrying a ContextCard, with a TTL
 - **Project** - identified by root directory (git root or configured). Each project accumulates its own context history.
-- **Switch** - a detected context change event. Triggers: snapshot → compress → store. Types: departure (you left), return (you came back), timeout (5min inactivity)
+- **Switch** - a detected context change event. Triggers: snapshot → compress → store. Types: departure (you left: project hop, branch switch, or >15min absence) and return (you came back)
 
 ## Conventions
 
 - **Rust daemon**: async Tokio runtime, minimal dependencies, <10MB RSS, <1% CPU at idle
 - **Ghost annotations NEVER modify real files** - VS Code decorations, terminal motd, ephemeral Slack messages. If REVENANT crashes, your workspace is unchanged.
 - **Privacy**: all data local by default. LLM calls optional and configurable. Clipboard capture opt-in. No telemetry.
-- **Self-destruct**: ghosts disappear after 5 minutes of activity. Configurable. The goal is to bridge the gap, not to persist.
+- **Self-destruct**: ghosts go dark after 1 minute by default (the transience law), raisable per channel. The goal is to bridge the gap, not to persist.
 - **Context cards are for future-you**: written in second person ("You were debugging..."), informal, specific. Never generic ("You were working on the project").
+- **THE CARD LAW**: a next step RESTORES what was in flight; it never orders, coaches, or judges. The only imperatives allowed are resume anchors to your own position ("Pick up at detector.rs:88").
+- **THE NAMING LAW**: cards speak the file's own name ("compressor.rs", "export/mod.rs"), never a taxonomy label ("utility code"). A topic equal to the project name is no topic; the card says less instead of echoing.
+- **Deterministic honesty**: the rule engine asserts only what the signals evidence (names, state, the search question you were asking). Restoring your HYPOTHESIS ("the timer isn't cleared on success") is the optional LLM layer's job - the rule engine never fabricates one.

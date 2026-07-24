@@ -182,7 +182,7 @@ fn corpus() -> Vec<(&'static str, WorkingState, Vec<&'static str>)> {
                     "tree src/pipeline",
                 ])),
             ),
-            vec!["legacy-importer", "import", "pipeline", "exploring"],
+            vec!["batch_size", "legacy-importer", "import", "pipeline", "exploring"],
         ),
     ]
 }
@@ -685,6 +685,64 @@ fn cards_name_real_files_never_taxonomy_labels() {
             );
         }
     }
+}
+
+#[test]
+fn cards_never_echo_the_project_name_twice() {
+    // "reviewing legacy-importer in legacy-importer": a topic equal to
+    // the project is no topic at all - the card says the project once
+    // or says less, never pads with an echo
+    let mut states: Vec<(String, WorkingState)> = corpus()
+        .into_iter()
+        .map(|(l, s, _)| (l.to_string(), s))
+        .collect();
+    // The worst case: nothing to say but the project itself
+    states.push((
+        "signal-poor exploration".into(),
+        state(
+            "lonely",
+            Some(git_state("main", "", &[], "")),
+            Some(terminal_state(&["git log --oneline -20", "tree src/"])),
+        ),
+    ));
+    states.push(("bare project".into(), state("mystery", None, None)));
+    for (label, s) in &states {
+        let card = rule_based_compress(s);
+        let count = card
+            .summary
+            .to_lowercase()
+            .matches(&s.project_name.to_lowercase())
+            .count();
+        assert!(
+            count <= 1,
+            "{label}: project name said {count} times in: {}",
+            card.summary
+        );
+    }
+}
+
+#[test]
+fn exploration_cards_surface_the_question() {
+    // The essence bar (CLAUDE.md: restore what you were TRYING to do;
+    // recent searches are part of the cognitive snapshot): the engine
+    // held "rg 'batch_size' src/" and used to say "reviewing
+    // legacy-importer". The search string is the user's own question,
+    // the closest deterministic proxy for where the head was.
+    let s = state(
+        "legacy-importer",
+        Some(git_state("main", "import pipeline hardening", &[], "")),
+        Some(terminal_state(&[
+            "rg 'batch_size' src/",
+            "git log --oneline -20",
+            "tree src/pipeline",
+        ])),
+    );
+    let card = rule_based_compress(&s);
+    assert!(
+        card.summary.contains("batch_size"),
+        "exploration card must surface the search question, got: {}",
+        card.summary
+    );
 }
 
 #[test]

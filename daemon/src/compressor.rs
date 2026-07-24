@@ -1182,19 +1182,24 @@ enum CardDepth {
 const TERSE_TEMPLATES: &[usize] = &[9, 4, 26];  // Minimal, Short+project, Simple+project
 const RICH_TEMPLATES: &[usize] = &[0, 6, 7, 11, 13, 17, 18, 24, 10]; // Multi-sentence, narrative
 
-/// Select a template based on a seed, available data, and depth
-fn select_template(card_id: &str, has_commit: bool, has_cluster: bool, has_branch: bool, depth: CardDepth) -> usize {
+/// Select a template based on a seed, available data, and depth.
+/// Returns None when no template can be filled honestly - the caller
+/// then builds the reliable summary from raw signals instead of
+/// stuffing a template with blanks.
+fn select_template(card_id: &str, has_topic: bool, has_commit: bool, has_cluster: bool, has_branch: bool, depth: CardDepth) -> Option<usize> {
     // Use card ID as a deterministic seed
     let seed: usize = card_id.bytes().map(|b| b as usize).sum();
 
     // Filter templates that we can fully populate
     let valid: Vec<usize> = TEMPLATES.iter().enumerate()
         .filter(|(_, t)| {
+            let needs_topic = t.contains("{topic}");
             let needs_commit = t.contains("{commit}");
             let needs_cluster = t.contains("{cluster}");
             let needs_branch = t.contains("{branch}");
 
-            (!needs_commit || has_commit)
+            (!needs_topic || has_topic)
+                && (!needs_commit || has_commit)
                 && (!needs_cluster || has_cluster)
                 && (!needs_branch || has_branch)
         })
@@ -1202,7 +1207,7 @@ fn select_template(card_id: &str, has_commit: bool, has_cluster: bool, has_branc
         .collect();
 
     if valid.is_empty() {
-        return 0;
+        return None;
     }
 
     // Filter by depth preference
@@ -1220,7 +1225,7 @@ fn select_template(card_id: &str, has_commit: bool, has_cluster: bool, has_branc
 
     // Fall back to all valid templates if depth filter yields nothing
     let pool = if depth_filtered.is_empty() { &valid } else { &depth_filtered };
-    pool[seed % pool.len()]
+    Some(pool[seed % pool.len()])
 }
 
 /// Fill a template with actual values
@@ -1260,8 +1265,12 @@ fn fill_template(
 
 // ─── Topic Extraction ───────────────────────────────────────────────────────
 
-/// Extract the main topic from all available signals
-fn extract_topic(state: &WorkingState) -> String {
+/// Extract the main topic from all available signals.
+/// Returns None when no signal carries a real topic: the caller must
+/// then say less, not more. The old fallback returned the project name
+/// disguised as a topic, which produced fabricated-looking echoes
+/// ("reviewing legacy-importer in legacy-importer").
+fn extract_topic(state: &WorkingState) -> Option<String> {
     // Best signal: commit message tells us what they were working on
     if let Some(ref git) = state.git {
         if let Some(commit) = git.recent_commits.first() {
@@ -1275,7 +1284,7 @@ fn extract_topic(state: &WorkingState) -> String {
                 // The rewritten message already starts with a gerund like "fixing X"
                 // We need just the object/topic part for "{intent} {topic}" templates
                 // But sometimes the intent IS the topic (when commit = full context)
-                return extract_object_from_rewrite(&rewritten);
+                return Some(extract_object_from_rewrite(&rewritten));
             }
         }
 
@@ -1289,27 +1298,59 @@ fn extract_topic(state: &WorkingState) -> String {
                 .unwrap_or(branch);
             let humanized = humanize_segment(topic_part);
             if !humanized.is_empty() {
-                return humanized;
+                return Some(humanized);
             }
         }
 
         // File-based topic: what domain are the changes in?
         if !git.changed_files.is_empty() {
             let desc = describe_path(&git.changed_files[0].path);
-            return desc.short_name;
+            return Some(desc.short_name);
         }
+    }
+
+    // The question being asked: a search pattern is the closest
+    // deterministic proxy for where the head was ("recent searches"
+    // are part of the cognitive snapshot by design)
+    if let Some(pattern) = last_search_pattern(&state.recent_commands()) {
+        return Some(pattern);
     }
 
     // Active file
     if let Some(ref ed) = state.editor {
         if let Some(ref active) = ed.active_file {
             let desc = describe_path(active);
-            return desc.short_name;
+            return Some(desc.short_name);
         }
     }
 
-    // Fallback
-    state.project_name.clone()
+    None
+}
+
+/// Pull the pattern out of the most recent search command. The search
+/// string is the user's own question, verbatim - the sharpest topic an
+/// exploration state can have.
+fn last_search_pattern(commands: &[&str]) -> Option<String> {
+    for cmd in commands.iter().take(5) {
+        let mut parts = cmd.split_whitespace();
+        let tool = parts.next().unwrap_or("");
+        if !matches!(tool, "rg" | "grep" | "ag" | "ack") {
+            continue;
+        }
+        for arg in parts {
+            // Skip flags and their obvious shapes; the first bare
+            // argument is the pattern
+            if arg.starts_with('-') {
+                continue;
+            }
+            let pattern = arg.trim_matches(|c| c == '\'' || c == '"');
+            if pattern.len() >= 2 {
+                return Some(format!("'{pattern}'"));
+            }
+            break;
+        }
+    }
+    None
 }
 
 /// Extract the object/topic from a rewritten commit message
@@ -1398,8 +1439,11 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
     // 1. Classify intent
     let intent = classify_intent(state);
 
-    // 2. Extract topic
-    let topic = extract_topic(state);
+    // 2. Extract topic. A topic equal to the project name is no topic
+    // at all: saying "reviewing legacy-importer in legacy-importer"
+    // restores nothing, so the card must say less instead.
+    let topic = extract_topic(state)
+        .filter(|t| !t.eq_ignore_ascii_case(&state.project_name));
 
     // 3. Rewrite commit message
     let commit_context = state.git.as_ref()
@@ -1446,25 +1490,30 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
         CardDepth::Rich
     };
 
-    let template_idx = select_template(&card_id, has_commit, has_cluster, has_branch, depth);
-
-    let summary = fill_template(
-        template_idx,
-        temporal,
-        intent.verb(),
-        intent.past(),
-        &topic,
-        &commit_context,
-        &cluster,
-        branch,
-        &state.project_name,
-        &active_file,
-        file_count,
-    );
+    // A template is only used when every slot it names can be filled
+    // honestly; otherwise the reliable summary below speaks instead
+    let template_summary = select_template(
+        &card_id, topic.is_some(), has_commit, has_cluster, has_branch, depth,
+    )
+    .map(|idx| {
+        fill_template(
+            idx,
+            temporal,
+            intent.verb(),
+            intent.past(),
+            topic.as_deref().unwrap_or(""),
+            &commit_context,
+            &cluster,
+            branch,
+            &state.project_name,
+            &active_file,
+            file_count,
+        )
+    });
 
     // Guard: ensure summary is always meaningful
     let summary = {
-        let s = summary.trim();
+        let s = template_summary.as_deref().unwrap_or("").trim();
         let has_project = s.to_lowercase().contains(&state.project_name.to_lowercase());
         let has_substance = s.len() > 40 && !s.ends_with("working on.") && !s.ends_with("working on");
 
@@ -1474,16 +1523,16 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
             // Good content but missing project name
             format!("In {}: {}", state.project_name, s)
         } else {
-            // Thin summary - build a reliable one from raw signals.
-            // ONE topic seam: extract_topic already ships the topic
-            // object-shaped (the rewrite's own gerund stripped), so the
-            // intent verb can never stack ("deploying bumping to v2.4.0").
-            // Never re-derive the activity from the raw commit here.
+            // Reliable summary from raw signals. ONE topic seam:
+            // extract_topic already ships the topic object-shaped (the
+            // rewrite's own gerund stripped, never the project name),
+            // so the intent verb can never stack and the project is
+            // never echoed. Never re-derive the activity here.
             let mut parts = Vec::new();
-            if !topic.is_empty() && topic != state.project_name {
+            if let Some(ref t) = topic {
                 parts.push(format!(
                     "{} {} {} in {}",
-                    temporal, intent.verb(), topic, state.project_name
+                    temporal, intent.verb(), t, state.project_name
                 ));
             } else if !active_file.is_empty() {
                 parts.push(format!(
