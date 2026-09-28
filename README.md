@@ -95,7 +95,7 @@ By default notes come from a rule engine that runs on your machine with no netwo
 
 | You use | What it does | What Revenant adds |
 |---|---|---|
-| Screen memory apps (Screenpipe, Microsoft Recall, Pieces) | Record or read your screen so you can search it later | No recording at all. You don't search: the note is shown to you when you return. |
+| Screen memory apps (Screenpipe, Pieces) | Record or read your screen so you can search it later | No recording at all. You don't search: the note is shown to you when you return. |
 | VS Code working sets, JetBrains Last Edit Location | Reopen your tabs or jump to your last edit, inside that IDE | Says what you were doing, and shows it in the terminal and browser too, for every project |
 | git-standup | Lists yesterday's commits | Covers work you haven't committed, your cursor and your last search |
 | A notes file, WIP commits, `git stash` | Works when you remember to do it | Nothing to remember |
@@ -139,7 +139,7 @@ rvn forget            # Delete notes for this project (--all for everything)
 - zsh, bash or fish
 - Optional: VS Code or Cursor, Chrome, Obsidian
 
-The daemon uses about 12 MB of memory and no measurable CPU when idle. Native Windows is not supported yet; the Linux build may work inside WSL2 with systemd enabled.
+The daemon uses about 12 MB of memory and no measurable CPU when idle.
 
 ## Contributing
 
