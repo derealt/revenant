@@ -257,17 +257,31 @@ impl GhostHttpServer {
 /// rules only decide the second question: whether this shell-open also
 /// counts as a return that wakes the other ghost channels.
 async fn shell_open_response(bridge: &ShellBridge, cwd: &str) -> String {
-    // A live terminal ghost is served as-is, so every shell that opens
-    // inside its window sees the same MOTD the reaper will soon fade
-    if let Ok(motd) = tokio::fs::read_to_string(&bridge.motd_path).await {
-        return text_response("200 OK", &motd);
-    }
-
     // Resolve which project this shell belongs to: its own git root,
     // else wherever the user last was
     let project = crate::watcher::find_git_root(&PathBuf::from(cwd))
         .map(|p| p.to_string_lossy().to_string())
         .or_else(|| bridge.detector.active_project());
+
+    // A live terminal ghost is served as-is to shells of ITS project, so
+    // every tab opened inside its window sees the MOTD the reaper will
+    // soon fade. A shell in another project gets its own greeting below:
+    // hopping to billing must not greet a new harbor tab with billing.
+    if let Ok(motd) = tokio::fs::read_to_string(&bridge.motd_path).await {
+        let live_project = tokio::fs::read_to_string(bridge.motd_path.with_extension("json"))
+            .await
+            .ok()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(&m).ok())
+            .and_then(|m| m.get("project_dir").and_then(|p| p.as_str()).map(String::from));
+        let same_project = match (&live_project, &project) {
+            (Some(live), Some(here)) => live == here,
+            // Metadata from an older daemon, or a shell outside any project
+            _ => true,
+        };
+        if same_project {
+            return text_response("200 OK", &motd);
+        }
+    }
 
     // Wake the other channels only when the detector calls this a
     // return (absence, project switch, or first sighting). A mid-flow

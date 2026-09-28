@@ -39,6 +39,7 @@ impl TerminalGhost {
         let meta = serde_json::json!({
             "card_id": card.id,
             "project": card.project_name,
+            "project_dir": card.project_dir,
             "created_at": card.created_at.to_rfc3339(),
             "ttl_seconds": card.ttl_seconds,
             "expires_at": (Utc::now() + chrono::Duration::seconds(card.ttl_seconds as i64)).to_rfc3339(),

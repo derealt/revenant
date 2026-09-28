@@ -23,6 +23,12 @@ pub struct GitState {
     pub recent_commits: Vec<CommitSummary>,
     /// Diff stat summary (e.g., "3 files changed, 47 insertions(+), 12 deletions(-)")
     pub diff_stat: String,
+    /// Commits on HEAD that no other branch (local or remote, bar this
+    /// branch's own upstream) contains. Zero on a branch just cut from
+    /// main: its latest commit is main's past work, not this work.
+    /// None when unknown (detached HEAD, older stored snapshots).
+    #[serde(default)]
+    pub own_commits: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +66,7 @@ pub fn capture(project_dir: &str) -> Result<GitState> {
     let (staged, modified, untracked, changed_files) = git_status(project_dir)?;
     let recent_commits = git_log(project_dir, 5)?;
     let diff_stat = git_diff_stat(project_dir)?;
+    let own_commits = git_own_commits(project_dir, &branch);
 
     Ok(GitState {
         branch,
@@ -69,7 +76,23 @@ pub fn capture(project_dir: &str) -> Result<GitState> {
         changed_files,
         recent_commits,
         diff_stat,
+        own_commits,
     })
+}
+
+fn git_own_commits(project_dir: &str, branch: &str) -> Option<usize> {
+    let exclude_local = format!("--exclude={branch}");
+    let exclude_upstream = format!("--exclude=*/{branch}");
+    let output = Command::new("git")
+        .args(["-C", project_dir, "rev-list", "--count", "HEAD", "--not"])
+        .args([exclude_local.as_str(), "--branches"])
+        .args([exclude_upstream.as_str(), "--remotes"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
 /// Just the current branch: cheap enough to poll, used by the daemon's

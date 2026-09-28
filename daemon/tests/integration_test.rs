@@ -169,6 +169,64 @@ fn generated_artifacts_never_become_the_card() {
     cleanup_test_project(&tmp);
 }
 
+/// Field regression (2026-09-28): the most common flow is "branch off main,
+/// start editing, get pulled away". The branch has no commits of its own
+/// yet, so the latest commit is main's past work, and the card said "you
+/// were building exponential backoff" while the user was fixing the
+/// reconnect timer. A commit only speaks for the work if it was made on
+/// this branch; until then the branch name does.
+#[test]
+fn fresh_branch_speaks_for_itself_not_mains_last_commit() {
+    let tmp = std::env::temp_dir().join("revenant-test-fresh-branch");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(tmp.join("src")).unwrap();
+    let run = |args: &[&str]| {
+        Command::new("git").args(args).current_dir(&tmp).output().unwrap()
+    };
+    run(&["init", "-b", "main"]);
+    run(&["config", "user.email", "test@revenant.dev"]);
+    run(&["config", "user.name", "Test"]);
+    fs::write(tmp.join("src/reconnect.rs"), "pub fn on_connect() {}\n").unwrap();
+    run(&["add", "."]);
+    run(&["commit", "-m", "Add exponential backoff to reconnect"]);
+    run(&["checkout", "-b", "fix/reconnect-timer"]);
+    fs::write(tmp.join("src/reconnect.rs"), "pub fn on_connect() { /* clear timer */ }\n").unwrap();
+
+    let card = rule_based_compress(&working_state_for(&tmp));
+    let text = card.summary.to_lowercase();
+    assert!(!text.contains("backoff"), "card spoke main's past commit: {}", card.summary);
+    assert!(text.contains("reconnect timer"), "card must name the branch's work: {}", card.summary);
+    assert!(text.contains("fixing"), "a fix/ branch is fixing: {}", card.summary);
+
+    // Once a commit is made ON the branch, it speaks for the work again
+    run(&["commit", "-am", "fix: clear retry timer after connect"]);
+    fs::write(tmp.join("src/reconnect.rs"), "pub fn on_connect() { /* clear timer */ }\n// more\n").unwrap();
+    let card = rule_based_compress(&working_state_for(&tmp));
+    assert!(card.summary.to_lowercase().contains("retry timer"), "got: {}", card.summary);
+
+    cleanup_test_project(&tmp);
+}
+
+/// A card is written when you leave and read when you come back, often hours
+/// later. A time phrase baked in at departure is always "moments ago", so a
+/// card read six hours later under a "6h ago" header said "You were just
+/// configuring...". The ghost's header carries the real age; the summary
+/// states no time of its own.
+#[test]
+fn card_summary_carries_no_stale_time_phrase() {
+    let project = setup_test_project("no-stale-time");
+    for _ in 0..12 {
+        // variants are picked at random; sample enough to hit them all
+        let card = rule_based_compress(&working_state_for(&project));
+        let s = card.summary.to_lowercase();
+        for phrase in ["just now", "moments ago", "you were just", "a little while ago",
+                       "not long ago", "recently you", "earlier", "a few hours ago", "yesterday"] {
+            assert!(!s.contains(phrase), "stale time phrase '{phrase}' in: {}", card.summary);
+        }
+    }
+    cleanup_test_project(&project);
+}
+
 #[test]
 fn git_capture_fails_outside_a_repo() {
     let tmp = std::env::temp_dir().join("revenant-test-not-a-repo");
@@ -787,11 +845,31 @@ async fn http_shell_open_answers_a_new_shell() {
     assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
     assert!(resp.contains("You were wiring the shell-open bridge."));
 
-    // With a live MOTD on disk, any shell inside its window sees it
+    // With a live MOTD on disk, a shell in THAT project sees it as-is
     fs::write(&motd_path, "LIVE GHOST BODY").unwrap();
+    fs::write(
+        tmp.join("motd.json"),
+        format!(r#"{{"card_id":"live","project_dir":"{project_dir}"}}"#),
+    )
+    .unwrap();
     let resp = shell_open(project_dir.clone()).await;
     assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
     assert!(resp.contains("LIVE GHOST BODY"));
+
+    // Field regression (2026-09-28): the live MOTD belonged to another
+    // project (you had just hopped to billing) and a new tab opened in
+    // harbor was greeted with billing's note. A shell gets its own
+    // project's card; another project's live ghost is not its greeting.
+    fs::write(
+        tmp.join("motd.json"),
+        r#"{"card_id":"live","project_dir":"/somewhere/else"}"#,
+    )
+    .unwrap();
+    let resp = shell_open(project_dir.clone()).await;
+    assert!(!resp.contains("LIVE GHOST BODY"), "served another project's ghost: {resp}");
+    assert!(resp.contains("You were wiring the shell-open bridge."), "got: {resp}");
+    fs::remove_file(&motd_path).unwrap();
+    fs::remove_file(tmp.join("motd.json")).unwrap();
 
     // Malformed body is rejected
     let bad = {

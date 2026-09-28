@@ -10,11 +10,11 @@
 //! clustering, next-step prediction, temporal framing, and template selection.
 
 use anyhow::{bail, Result};
-use chrono::{Datelike, Utc};
+use chrono::Utc;
 use uuid::Uuid;
 
 use crate::config::LlmConfig;
-use crate::signals::git::ChangeStatus;
+use crate::signals::git::{ChangeStatus, CommitSummary, GitState};
 use crate::snapshot::WorkingState;
 use crate::store::ContextCard;
 
@@ -78,13 +78,27 @@ impl Intent {
     }
 }
 
+/// The latest commit, only when it speaks for the work in flight. On a
+/// trunk branch the latest commit is the flow of work. On a branch just cut
+/// from main (no commits of its own yet) it is main's past work, so the
+/// branch name and the edits must speak instead.
+fn current_commit(git: &GitState) -> Option<&CommitSummary> {
+    let on_trunk = matches!(git.branch.as_str(), "main" | "master" | "dev" | "develop");
+    let made_here = git.own_commits.map_or(true, |n| n > 0);
+    if on_trunk || made_here {
+        git.recent_commits.first()
+    } else {
+        None
+    }
+}
+
 /// Classify user intent from all available signals
 fn classify_intent(state: &WorkingState) -> Intent {
     let mut scores: Vec<(Intent, i32)> = Vec::new();
 
     // From commit message prefix
     if let Some(ref git) = state.git {
-        if let Some(commit) = git.recent_commits.first() {
+        if let Some(commit) = current_commit(git) {
             let msg = commit.message.to_lowercase();
             let stripped = strip_conventional_prefix(&msg);
             if stripped.starts_with("fix") || msg.starts_with("fix") {
@@ -1062,43 +1076,11 @@ fn is_test_command(cmd: &str) -> bool {
 
 // ─── 6. Temporal Framing ────────────────────────────────────────────────────
 
-/// Produce a time-aware opening phrase
-fn temporal_frame(state: &WorkingState) -> &'static str {
-    let now = Utc::now();
-    let elapsed = now.signed_duration_since(state.timestamp);
-    let minutes = elapsed.num_minutes();
-
-    if minutes < 30 {
-        pick_variant(&["Just now you were", "Moments ago you were", "You were just"])
-    } else if minutes < 120 {
-        pick_variant(&["A little while ago you were", "Not long ago you were", "Recently you were"])
-    } else if minutes < 480 {
-        pick_variant(&["Earlier today you were", "Earlier you were", "A few hours ago you were"])
-    } else if minutes < 1440 {
-        pick_variant(&["Yesterday you were", "Last session you were"])
-    } else if minutes < 4320 {
-        pick_variant(&["A few days ago you were", "A couple days ago you were"])
-    } else {
-        // > 3 days - use weekday
-        let weekday = state.timestamp.weekday();
-        match weekday {
-            chrono::Weekday::Mon => "Last Monday you were",
-            chrono::Weekday::Tue => "Last Tuesday you were",
-            chrono::Weekday::Wed => "Last Wednesday you were",
-            chrono::Weekday::Thu => "Last Thursday you were",
-            chrono::Weekday::Fri => "Last Friday you were",
-            chrono::Weekday::Sat => "Last Saturday you were",
-            chrono::Weekday::Sun => "Last Sunday you were",
-        }
-    }
-}
-
-/// Simple deterministic variant picker (seeded by current minute to vary)
-fn pick_variant(options: &[&'static str]) -> &'static str {
-    // Use the current second as a cheap seed for variety
-    let now = Utc::now();
-    let idx = now.timestamp().unsigned_abs() as usize % options.len();
-    options[idx]
+/// The card is written when you leave and read when you return, often hours
+/// later, so a time phrase chosen at departure ("Moments ago...") would be
+/// false by the time it is read. The ghost's header shows the real age.
+fn temporal_frame(_state: &WorkingState) -> &'static str {
+    "You were"
 }
 
 // ─── 7. Template Library ────────────────────────────────────────────────────
@@ -1273,7 +1255,7 @@ fn fill_template(
 fn extract_topic(state: &WorkingState) -> Option<String> {
     // Best signal: commit message tells us what they were working on
     if let Some(ref git) = state.git {
-        if let Some(commit) = git.recent_commits.first() {
+        if let Some(commit) = current_commit(git) {
             let rewritten = rewrite_commit_message(&commit.message);
             // Only an activity-shaped rewrite may become the topic. A
             // sentence-shaped commit subject ("Terminal ghost answers
@@ -1447,7 +1429,7 @@ pub fn rule_based_compress(state: &WorkingState) -> ContextCard {
 
     // 3. Rewrite commit message
     let commit_context = state.git.as_ref()
-        .and_then(|g| g.recent_commits.first())
+        .and_then(current_commit)
         .map(|c| rewrite_commit_message(&c.message))
         .unwrap_or_default();
 

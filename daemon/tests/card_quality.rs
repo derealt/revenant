@@ -48,6 +48,8 @@ fn git_state(
             }]
         },
         diff_stat: diff_stat.to_string(),
+        // Unknown, as in snapshots stored before the field existed
+        own_commits: None,
     }
 }
 
