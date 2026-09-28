@@ -1,8 +1,8 @@
 {
   "name": "revenant-ghost-browser",
-  "displayName": "REVENANT Ghost",
-  "description": "Browser extension for cognitive context restoration - shows what you were doing when you last visited",
-  "version": "0.3.0",
+  "displayName": "Revenant: where you left off",
+  "description": "Shows where you left off in your code when you come back to your computer",
+  "version": "0.3.1",
   "license": "MIT",
   "repository": {
     "type": "git",

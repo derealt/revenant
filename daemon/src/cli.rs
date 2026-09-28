@@ -1108,10 +1108,8 @@ fn cmd_setup(
                 }
             }
             println!("\x1b[2m\u{2502}\x1b[0m");
-            println!("\x1b[2m\u{2502}\x1b[0m Optional: let the daemon see your active tab as a context");
-            println!("\x1b[2m\u{2502}\x1b[0m signal (off by default). In config.toml:");
-            println!("\x1b[2m\u{2502}\x1b[0m   [signals]");
-            println!("\x1b[2m\u{2502}\x1b[0m   browser = true");
+            println!("\x1b[2m\u{2502}\x1b[0m The extension only draws the banner. It reads nothing from");
+            println!("\x1b[2m\u{2502}\x1b[0m the pages you visit.");
             println!("\x1b[2m\u{2514}\u{2500}\u{2500}\u{2500}\x1b[0m");
         }
 

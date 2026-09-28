@@ -34,7 +34,7 @@ REVENANT doesn't reduce context switches. It makes each return cheaper.
 ## Stack
 
 - **Daemon**: Rust (file watchers via `notify`, inotify/FSEvents, minimal CPU/memory footprint)
-- **Context capture**: Git state, file modification timestamps, editor state (recently edited files + VS Code workspace state), terminal history (zsh/bash history parsing), clipboard contents (opt-in), active browser tab (opt-in, reported by the extension)
+- **Context capture**: Git state, file modification timestamps, editor state (recently edited files + VS Code workspace state), terminal history (zsh/bash history parsing), clipboard contents (opt-in). The Chrome extension reports nothing: it only fetches and draws the card (no `tabs` permission; store policy wants minimal permissions)
 - **LLM compression**: Local model (Ollama) or API (Claude/OpenAI) - converts raw state signals into a natural-language context card. The prompt: "Given these signals about what the user was doing, write a 2-sentence note: what they were trying to accomplish, and what their next step was. Write it as if leaving a note for yourself." Default is the rule engine: no LLM, no network.
 - **Ghost injection**: Plugin architecture per tool:
   - **VS Code**: Extension inserts a transient inline decoration (not a real comment - a visual overlay that doesn't modify the file)
@@ -61,7 +61,7 @@ revenant/
 │   │   │   ├── editor.rs    # Recently edited files + VS Code workspace state
 │   │   │   ├── terminal.rs  # Recent commands from shell history, cwd
 │   │   │   ├── clipboard.rs # Last clipboard content (text only, never images)
-│   │   │   └── browser.rs   # Active tab, POSTed by the extension to the HTTP server
+│   │   │   └── browser.rs   # Tab store for POST /tab (no current client sends it)
 │   │   ├── snapshot.rs      # Aggregates all signals into a WorkingState struct
 │   │   ├── detector.rs      # Context switch detection: project change, branch change, absence
 │   │   ├── compressor.rs    # WorkingState to ContextCard (rule engine or LLM)

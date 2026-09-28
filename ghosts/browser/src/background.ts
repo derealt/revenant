@@ -8,7 +8,6 @@
 // when a ghost actually needs to appear.
 
 const DAEMON_URL = "http://127.0.0.1:7711/ghost";
-const TAB_REPORT_URL = "http://127.0.0.1:7711/tab";
 const POLL_ALARM = "revenant-poll";
 
 interface ContextCard {
@@ -46,24 +45,37 @@ async function setState(patch: Partial<GhostState>): Promise<void> {
 
 // ─── Daemon I/O ────────────────────────────────────────────────────
 
-async function fetchGhost(): Promise<ContextCard | null> {
+interface DaemonReply {
+  card: ContextCard | null;
+  // False when nothing answers on 127.0.0.1:7711: the Revenant app is not
+  // installed or not running, which the popup tells the user
+  running: boolean;
+}
+
+async function askDaemon(): Promise<DaemonReply> {
   try {
     const resp = await fetch(DAEMON_URL);
-    if (!resp.ok) return null;
+    if (!resp.ok) return { card: null, running: true };
     const msg: DaemonMessage = await resp.json();
-    return msg.type === "inject" && msg.card ? msg.card : null;
+    const card = msg.type === "inject" && msg.card ? msg.card : null;
+    return { card, running: true };
   } catch {
-    // Daemon not running
-    return null;
+    return { card: null, running: false };
   }
+}
+
+async function fetchGhost(): Promise<ContextCard | null> {
+  return (await askDaemon()).card;
 }
 
 // ─── Broadcast to tabs ─────────────────────────────────────────────
 
+// Every tab by id. The extension never reads tab addresses; tabs without
+// the banner script (chrome:// pages, the web store) just reject the message.
 async function broadcast(message: object): Promise<void> {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
-    if (tab.id && tab.url && /^https?:/.test(tab.url)) {
+    if (tab.id !== undefined) {
       chrome.tabs.sendMessage(tab.id, message).catch(() => {});
     }
   }
@@ -112,17 +124,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       const { active, dismissedId } = await getState();
       if (active) {
-        sendResponse({ card: active });
+        sendResponse({ card: active, running: true });
         return;
       }
       // Cold cache (worker just woke): ask the daemon directly
-      const card = await fetchGhost();
+      const { card, running } = await askDaemon();
       if (card && card.id !== dismissedId) {
         await setState({ active: card });
         setBadge(true);
-        sendResponse({ card });
+        sendResponse({ card, running });
       } else {
-        sendResponse({ card: null });
+        sendResponse({ card: null, running });
       }
     })();
     return true; // keep sendResponse alive for the async reply
@@ -142,30 +154,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
-// ─── Tab events: re-show the ghost and report the active tab ───────
-
-async function reportActiveTab(): Promise<void> {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab?.url || !/^https?:/.test(tab.url)) return;
-    await fetch(TAB_REPORT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify([
-        {
-          url: tab.url,
-          title: tab.title ?? "",
-          timestamp: Math.floor(Date.now() / 1000),
-        },
-      ]),
-    });
-  } catch {
-    // Daemon not running
-  }
-}
+// ─── Tab events: re-show the ghost when you switch or load a tab ───
 
 chrome.tabs.onActivated.addListener(async (info) => {
-  reportActiveTab();
   await pollDaemon();
   const { active } = await getState();
   if (active && info.tabId) {
@@ -177,7 +168,6 @@ chrome.tabs.onActivated.addListener(async (info) => {
 
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
   if (changeInfo.status === "complete") {
-    reportActiveTab();
     pollDaemon();
   }
 });

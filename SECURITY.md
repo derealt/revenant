@@ -4,7 +4,7 @@ REVENANT runs on your machine and reads what you work on, so its security model 
 
 ## What it touches
 
-- **Reads:** git state of your projects, file modification times, your shell history file, the editor extension's state file (open files, cursor line), and, only if you turn them on, clipboard text and the active browser tab.
+- **Reads:** git state of your projects, file modification times, your shell history file, the editor extension's state file (open files, cursor line), and, only if you turn it on, clipboard text. The Chrome extension reads nothing from your browser: it only draws the banner.
 - **Writes:** its own files under `~/.revenant/` and `~/.config/revenant/`, one line in your shell rc file (added by `rvn init`), and a LaunchAgent (macOS) or systemd user unit (Linux). It never modifies your project files.
 - **Network:** none by default. If you enable LLM cards, the card prompt goes from your machine to the provider you chose (Anthropic, OpenAI, or a local Ollama).
 

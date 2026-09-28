@@ -20,7 +20,7 @@ git = true
 editor_enabled = true
 terminal_enabled = true
 clipboard = false       # opt-in: privacy-sensitive
-browser = false         # opt-in: active tab reported by the browser extension
+browser = false         # tab signal; the browser extension does not send tabs
 
 # File patterns to ignore (in addition to .gitignore)
 ignore_patterns = [

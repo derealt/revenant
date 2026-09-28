@@ -89,7 +89,8 @@ By default notes come from a rule engine that runs on your machine with no netwo
 - **Local only.** Notes live in a SQLite file in `~/.revenant/` and are deleted after 30 days. `rvn forget` deletes them now.
 - **Web pages can't reach it.** The local server on `127.0.0.1:7711` refuses any request from a web page, so a site you visit can't read your notes or write into the banner. See [SECURITY.md](SECURITY.md).
 - **Your files are never touched.** Editor marks, terminal text and banners are drawn on top and disappear.
-- **Clipboard and browser tab signals are off** unless you turn them on in the config.
+- **Clipboard capture is off** unless you turn it on in the config.
+- **The Chrome extension only draws the banner.** It does not read the pages you visit, their addresses or your history. See [PRIVACY.md](PRIVACY.md).
 
 ## How it compares
 

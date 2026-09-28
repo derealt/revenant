@@ -1,22 +1,35 @@
 {
   "manifest_version": 3,
-  "name": "REVENANT Ghost",
-  "version": "0.3.0",
-  "description": "Cognitive context restoration - shows what you were doing when you last visited this page",
-  "permissions": ["activeTab", "tabs", "storage", "alarms"],
+  "name": "Revenant: where you left off",
+  "version": "0.3.1",
+  "description": "Shows where you left off in your code when you come back to your computer. Works with the free Revenant app for Mac and Linux.",
+  "homepage_url": "https://github.com/derealt/revenant",
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:7711/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["ghost.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "ghost.css"
+      ],
       "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_title": "REVENANT Ghost",
+    "default_title": "Revenant",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon16.png",
@@ -28,6 +41,5 @@
     "32": "icon32.png",
     "48": "icon48.png",
     "128": "icon128.png"
-  },
-  "host_permissions": ["http://127.0.0.1:7711/*"]
+  }
 }

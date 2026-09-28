@@ -59,7 +59,7 @@ function showBanner(card: ContextCard): void {
   const dismiss = document.createElement('button');
   dismiss.className = 'revenant-dismiss';
   dismiss.textContent = '\u{2715}'; // multiplication sign (x)
-  dismiss.title = 'Dismiss ghost';
+  dismiss.title = 'Dismiss';
   dismiss.addEventListener('click', (e) => {
     e.stopPropagation();
     removeBanner();
