@@ -1,0 +1,35 @@
+name: Something broke
+description: Install, daemon, a ghost channel or the CLI misbehaves
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Where
+      multiple: true
+      options: [Install, Daemon, Terminal, VS Code / Cursor, Chrome, Obsidian, Slack, CLI]
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `rvn status`
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Last lines of ~/.revenant/logs (redact paths if you like)
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version and platform
+      placeholder: rvn 0.3.0, Ubuntu 24.04 x86_64, bash
+    validations:
+      required: true

@@ -1,0 +1,33 @@
+name: The card was wrong
+description: The ghost said something that was not what you were doing
+labels: ["card-quality"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Wrong cards are the most useful report we get. Please redact anything private (project names, paths, commit messages) before you paste.
+  - type: textarea
+    id: card
+    attributes:
+      label: What the card said
+      description: Paste the card from the terminal, editor or browser, or from `rvn history -n 1`
+    validations:
+      required: true
+  - type: textarea
+    id: truth
+    attributes:
+      label: What you were actually doing
+    validations:
+      required: true
+  - type: textarea
+    id: state
+    attributes:
+      label: Anything unusual about the repo
+      description: For example files that a build rewrites, a monorepo, detached HEAD, nothing committed yet
+  - type: input
+    id: version
+    attributes:
+      label: Version and platform
+      placeholder: rvn 0.3.0, macOS 15 arm64, zsh
+    validations:
+      required: true

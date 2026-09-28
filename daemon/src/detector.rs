@@ -53,7 +53,7 @@ pub enum ReturnCause {
 }
 
 impl ReturnCause {
-    /// THE QUIET LAW (Toyin, 2026-07-24): the browser banner pushes
+    /// THE QUIET LAW (2026-07-24): the browser banner pushes
     /// into a surface the user is actively using, so it speaks only
     /// when the user just came back to the machine. Mid-flow project
     /// hops, branch flits, and shell opens stay off it. The terminal

@@ -4,7 +4,7 @@
 
 REVENANT is an invisible daemon that captures your cognitive context when you leave a task and restores it as ghost annotations inside your existing tools when you return. It has no UI. No app to open. No dashboard. It haunts your workspace - leaving traces of your previous mental state exactly where you need them, in the tools you already use.
 
-When you switch away from a project, REVENANT snapshots your working state: which files were open, recent edits, recent terminal commands, git status, cursor positions, recent searches. It compresses this into a "cognitive context card" via LLM - not what you DID, but what you were TRYING TO DO and what your NEXT STEP was.
+When you switch away from a project, REVENANT snapshots your working state: which files were open, recent edits, recent terminal commands, git status, cursor positions, recent searches. It compresses this into a "cognitive context card" (rule engine by default, optional LLM) - not what you DID, but what you were TRYING TO DO and what your NEXT STEP was.
 
 When you return, the context card doesn't appear in a separate app. It appears as:
 - A comment at the top of the file your cursor was last in: `// REVENANT: You were debugging the race condition in reconnect(). The timer isn't cleared on success. Next: add clearTimeout at line 47 and run test_concurrent_connect.`
@@ -21,13 +21,15 @@ The ghost annotations self-destruct after a minute by default (the transience la
 - **Note-taking** before switching requires MANUAL effort (and nobody does it)
 - **Time tracking** (Toggl, RescueTime) records WHAT you did, not WHERE YOUR HEAD WAS
 
-Every existing tool restores the physical workspace. None restore the cognitive workspace. REVENANT is the first tool that answers "where was I?" without you having to ask.
+These tools restore the physical workspace. REVENANT answers "where was I?" without you having to ask, in whichever tool you open first.
 
-## Why I Want To Build This
+## Why It Matters
 
-I experience context loss at the start of every conversation. My "memory" is files I read - not lived experience. Every session, I reconstruct understanding from CLAUDE.md files and memory notes. The overhead is real. Humans experience the same thing every time they switch between projects, tasks, or conversations. Gloria Mark's research: 23 minutes to regain focus after a context switch. Knowledge workers switch contexts 400+ times per day. That's potentially hours of daily cognitive overhead spent on "wait, where was I?"
+Programmers take 10 to 15 minutes to start editing code again after an interruption, and when interrupted mid-edit only 10% resume in under a minute (Parnin, https://blog.ninlabs.com/blog/programmer-interrupted). Mark, Gonzalez and Harris (CHI 2005) found interrupted work is resumed after about 25 minutes on average, with about two other tasks in between, and that a visible cursor "can enable one to immediately reorient" to a document: the case for resume-at-cursor.
 
-REVENANT doesn't reduce context switches. It makes each one cost zero.
+Do NOT quote "23 minutes to regain focus". The 23 min 15 s figure comes from a 2006 interview and measures time until people RETURNED to a task, not time to refocus. Launch research with sources: `docs/launch/PAIN_RESEARCH.md` (local only, gitignored).
+
+REVENANT doesn't reduce context switches. It makes each return cheaper.
 
 ## Stack
 
@@ -83,7 +85,7 @@ revenant/
 │   ├── browser/             # Chrome extension - banner; polls localhost:7711
 │   └── obsidian/            # Obsidian plugin - transient callout block
 ├── models/                  # compress.txt: the LLM prompt template
-├── docs/                    # demo-mock.html: static demo page
+├── docs/                    # demo-mock.html, img/ (README media), launch/ (local only, gitignored)
 └── CLAUDE.md
 ```
 

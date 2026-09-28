@@ -1,138 +1,150 @@
 # REVENANT
 
-**Cognitive context restoration.** An invisible daemon that captures what you were doing when you leave a task and restores it as ghost annotations in your existing tools when you return.
+**Revenant shows you where you left off in your code when you come back from a break, a meeting or another branch.**
 
-No UI. No app to open. No notes to write. The ghost appears in your terminal, your editor, your browser - exactly where you return first. It self-destructs after a few minutes of activity (the TTL scales with how long you were away).
+It runs in the background on macOS and Linux. When you leave a task, it writes a short note from your git state, your editor and your shell. When you come back, the note is waiting in the first place you look: a new terminal, VS Code or Cursor, or Chrome. It never records your screen, and nothing leaves your machine.
 
-## The Problem
+![A new terminal opens and Revenant prints where you left off in this project](docs/img/demo.gif)
 
-You're deep in a bug fix. A meeting starts. You close your laptop. Two hours later you come back and stare at 47 open tabs. What was I doing? What was the bug? What was I about to try?
+```bash
+curl -fsSL https://raw.githubusercontent.com/derealt/revenant/dev/install.sh | bash
+```
 
-That 23 minutes of fumbling costs you every time you switch contexts. REVENANT eliminates it.
+Free and open source (MIT). No account, no server, no telemetry.
 
-## How It Works
+## The problem
 
-1. **You work.** REVENANT watches silently - git state, open files, terminal commands.
-2. **You leave.** REVENANT captures your cognitive context and compresses it into a card.
-3. **You return.** The ghost appears - in your terminal, your editor, your browser.
-4. **You read it.** 10 seconds. You're back in flow.
-5. **It vanishes.** 5 minutes later, the ghost is gone.
+You come back from lunch, a meeting, a weekend, or an hour on someone else's branch, and spend the first ten minutes working out what you were doing.
+
+> "I started keeping a markdown file at the root of every project that captures state and next steps whenever I stop working on it, purely so I can resume without the 20-minute 'wait where was I' tax."
+> ([Hacker News, 2026](https://news.ycombinator.com/item?id=47906989))
+
+> "When I sit down to work, I waste 10-15 minutes figuring out where I left off."
+> ([Hacker News, 2026](https://news.ycombinator.com/item?id=46596793))
+
+> "I was juggling too many Claude Code sessions across different branches and kept losing track."
+> ([Hacker News, 2026](https://news.ycombinator.com/item?id=46512483))
+
+Research on programmers found it takes 10 to 15 minutes to start editing code again after an interruption ([Parnin](https://blog.ninlabs.com/blog/programmer-interrupted)). The usual fixes all need you to do something before you leave: update a notes file, make a WIP commit, stash and hope you remember, or type a sentence into the code that breaks the build. When you are interrupted, you don't get the chance.
+
+Revenant writes the note for you, at the moment you leave, and shows it to you at the moment you return.
+
+## What you see when you come back
+
+**In a new terminal.** Every new shell prints the note for the project you are in.
+
+```
+╔══  REVENANT │ Harbor │ 2h ago  ══╗
+║ You were fixing reconnect timer in Harbor.
+║ → Your edits, tests included, were still unstaged.
+╚══ ghost fades in 1min of activity ══╝
+```
+
+**In VS Code or Cursor.** A toast says `Resume at reconnect.rs:17`. Click it and your cursor goes back to that line, centred, with the line marked for a minute.
+
+**In Chrome.** After your laptop wakes from sleep, a small banner at the top of the page shows the note. It does not appear while you are working, only when you come back.
+
+![The Chrome banner after the machine wakes](docs/img/browser-banner.png)
+
+**In Obsidian and Slack** (optional). A callout in your vault, or a message only you can see.
+
+Every note disappears after about a minute. Its job is to get you started, then get out of the way.
+
+## When it writes a note
+
+Revenant saves a note for the project you are leaving when you:
+
+- switch to a different project,
+- switch git branch, or
+- step away for 15 minutes or close the lid.
+
+## What goes into a note
+
+- your branch, what is staged and unstaged, and your recent commits
+- the files you changed, by their real names
+- the file and line your cursor was on (with the editor extension)
+- your last `rg` or `grep` search, because the thing you were searching for is usually the question you were trying to answer
+- your recent shell commands
+
+Real notes from the rule engine's test corpus:
+
+```
+You were fixing reconnect timer before retry in harbord.
+Next: You were mid test-and-fix - your latest edits landed after the last test run.
+
+You were building invoice export scaffolding (billingd).
+Next: You were partway into a commit - the changes were already staged.
+
+You were reviewing 'batch_size' (legacy-importer).
+Next: You left no half-finished thread on record.
+```
+
+A note tells you what was in progress. It never tells you what to do next, and it never guesses. If there is little to go on, the note is short.
+
+By default notes come from a rule engine that runs on your machine with no network. If you want fuller notes, you can point it at a model: Ollama (stays local), Claude or OpenAI.
+
+## Privacy
+
+- **No screen recording, no screenshots, no keystroke logging.** Revenant reads git, file names and times, your shell history file, and what the editor extension reports.
+- **Local only.** Notes live in a SQLite file in `~/.revenant/` and are deleted after 30 days. `rvn forget` deletes them now.
+- **Web pages can't reach it.** The local server on `127.0.0.1:7711` refuses any request from a web page, so a site you visit can't read your notes or write into the banner. See [SECURITY.md](SECURITY.md).
+- **Your files are never touched.** Editor marks, terminal text and banners are drawn on top and disappear.
+- **Clipboard and browser tab signals are off** unless you turn them on in the config.
+
+## How it compares
+
+| You use | What it does | What Revenant adds |
+|---|---|---|
+| Screen memory apps (Screenpipe, Microsoft Recall, Pieces) | Record or read your screen so you can search it later | No recording at all. You don't search: the note is shown to you when you return. |
+| VS Code working sets, JetBrains Last Edit Location | Reopen your tabs or jump to your last edit, inside that IDE | Says what you were doing, and shows it in the terminal and browser too, for every project |
+| git-standup | Lists yesterday's commits | Covers work you haven't committed, your cursor and your last search |
+| A notes file, WIP commits, `git stash` | Works when you remember to do it | Nothing to remember |
 
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/derealt/revenant/dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/derealt/revenant/dev/install.sh | bash
 ```
 
-Or manually:
+This downloads the binaries for your platform from the latest release, checks them against the published checksums, puts `revenant` and `rvn` in `~/.local/bin`, adds the shell hook, and starts the daemon (a LaunchAgent on macOS, a systemd user service on Linux). Open a new terminal and it is running.
+
+Or download a release from [Releases](https://github.com/derealt/revenant/releases), put both binaries on your PATH and run `rvn init`.
+
+Then add the places you want notes to appear:
 
 ```bash
-# Download the binary for your platform from Releases
-# Move to your PATH:
-mv revenant rvn ~/.local/bin/
-
-# Initialize:
-rvn init
-
-# Open a new terminal. REVENANT is running.
+rvn setup vscode              # VS Code or Cursor extension
+rvn setup browser             # Chrome extension
+rvn setup obsidian --vault ~/notes
+rvn setup llm                 # optional: fuller notes from Ollama, Claude or OpenAI
 ```
 
-## Ghost Channels
-
-| Channel | How it appears | Setup |
-|---------|---------------|-------|
-| **Terminal** | MOTD on new shell tab | Automatic with `rvn init` |
-| **Chrome** | Banner at top of page | `rvn setup browser` (build + load the extension; it polls the daemon on `localhost:7711`) |
-| **VS Code** | Inline decoration | `rvn setup vscode` (build + install the extension) |
-| **Obsidian** | Callout block | `rvn setup obsidian --vault /path/to/vault` |
-| **Slack** | Ephemeral message | `rvn setup slack` (advanced: needs a Slack app and a manually built Go sidecar; see below) |
+Each command prints the exact download and install steps.
 
 ## Commands
 
 ```bash
-rvn init              # First-time setup
-rvn status            # Daemon health, channel status, latest card
-rvn history           # View past context cards
-rvn history -p DIR    #   ...for a specific project
-rvn history -n 20     #   ...more of them
-rvn test              # Inject a test ghost into every enabled channel
-rvn clear             # Dismiss the current ghost everywhere, immediately
-rvn digest            # Attention digest across projects (last 7 days)
-rvn digest --days 30  #   ...further back
-rvn setup llm         # Enable AI-powered cards (optional)
-rvn setup browser     # Browser ghost setup instructions
-rvn setup vscode      # VS Code ghost setup instructions
-rvn setup obsidian    # Obsidian ghost setup (--vault enables it directly)
-rvn setup slack       # Slack ghost setup (--token/--user/--channel-id enable it)
-rvn off               # Stop the daemon
-rvn on                # Start the daemon
-rvn forget            # Delete context cards for the current project
-rvn forget --all      # Delete ALL context cards
-```
-
-## What the Ghost Looks Like
-
-**Terminal:**
-```
-┌─── REVENANT ─── harbor ─── 2h ago ───
-│ You were fixing the WebSocket subscription format and
-│ reconnection logic. 3 files changed, 45 lines added.
-│ Next: run the reconnect tests to verify your fix holds.
-└─── ghost expires in 5min of activity ───
-```
-
-**Chrome:**
-
-A subtle banner at the top of any webpage with your context summary and next step. Dismiss with X or it auto-clears after 5 minutes. The extension polls the daemon at `http://127.0.0.1:7711/ghost`; nothing leaves your machine.
-
-Optionally, the extension can report your active tab back to the daemon as a context signal. This is OFF by default; the daemon discards tab reports unless you set `browser = true` under `[signals]` in the config.
-
-## Slack (advanced)
-
-The Slack ghost posts ephemeral messages (visible only to you) via a small Go sidecar that listens on `~/.revenant/slack.sock`. It is intentionally manual:
-
-1. Create a Slack app with `chat:write` scope, install it, and copy the bot token.
-2. `rvn setup slack --token xoxb-... --user U0XXXXXXX --channel-id C0XXXXXXX` writes the config and enables the channel.
-3. Build and run the sidecar yourself: `cd ghosts/slack && go build && ./revenant-slack`.
-
-If you skip step 3, the channel stays quiet; nothing else breaks.
-
-## LLM Compression (Optional)
-
-By default, REVENANT uses a smart rule engine - 7 components that produce natural context cards from git signals, commit messages, and file paths. Zero network, zero cost, zero latency.
-
-Optionally, enable LLM compression for richer cards:
-
-```bash
-rvn setup llm --provider claude --key YOUR_API_KEY
-rvn off && rvn on
-```
-
-Supports: Claude (Anthropic), OpenAI, Ollama (local, free).
-
-## Privacy
-
-- **All data stays on your machine.** No server, no cloud, no telemetry.
-- **LLM calls are opt-in** and go directly from your machine to the provider.
-- **Ghost annotations never modify your files.** VS Code decorations, terminal MOTD, browser DOM injection - all ephemeral.
-- **Clipboard and browser signals are opt-in** in the config.
-
-## Architecture
-
-```
-~/.local/bin/revenant    - daemon (runs as LaunchAgent)
-~/.local/bin/rvn         - CLI
-~/.revenant/             - runtime data (db, pid, logs, ghost state)
-~/.config/revenant/      - config + shell integration
+rvn status            # Is the daemon running, which channels are live, the latest note
+rvn history           # Past notes (-p DIR for one project, -n 20 for more)
+rvn digest            # Where your attention went across projects, last 7 days
+rvn test              # Show a test note everywhere
+rvn clear             # Dismiss the current note everywhere
+rvn off / rvn on      # Stop or start the daemon
+rvn forget            # Delete notes for this project (--all for everything)
 ```
 
 ## Requirements
 
-- macOS (Apple Silicon or Intel), or Linux x86_64 with systemd (daemon CI-tested on Ubuntu; field reports welcome)
-- zsh, bash, or fish shell
-- Chrome (for browser ghost)
-- VS Code or Cursor (for editor ghost)
+- macOS (Apple Silicon or Intel), or Linux (x86_64 or arm64) with systemd
+- zsh, bash or fish
+- Optional: VS Code or Cursor, Chrome, Obsidian
+
+The daemon uses about 12 MB of memory and no measurable CPU when idle. Native Windows is not supported yet; the Linux build may work inside WSL2 with systemd enabled.
+
+## Contributing
+
+Bug reports and wrong notes are the most useful thing you can send. If a note said something that wasn't true, open a ["The card was wrong"](https://github.com/derealt/revenant/issues/new?template=wrong-card.yml) issue. See [CONTRIBUTING.md](CONTRIBUTING.md) to build and test.
 
 ## License
 
-MIT
+MIT. Maintained by [Syntaxe](https://syntaxeltd.com).

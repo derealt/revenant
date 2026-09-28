@@ -23,3 +23,6 @@ revenant-slack
 .env
 release/
 chrome-extension/
+
+# Launch research and drafts: internal, never published
+docs/launch/
