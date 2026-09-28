@@ -165,9 +165,13 @@ impl GhostHttpServer {
                     None => return,
                 };
 
+                if !request_allowed(&request, port) {
+                    return respond(&mut stream, &json_response("403 Forbidden", "")).await;
+                }
+
                 let (method, path) = request_line(&request);
                 let response = match (method, path) {
-                    ("OPTIONS", _) => cors_response("204 No Content", ""),
+                    ("OPTIONS", _) => json_response("204 No Content", ""),
                     ("GET", _) => {
                         // Ghosts are transient: an expired card is served
                         // (and stored) as cleared
@@ -180,7 +184,7 @@ impl GhostHttpServer {
                                 g.json.clone()
                             })
                             .unwrap_or_else(|_| CLEAR_JSON.to_string());
-                        cors_response("200 OK", &body)
+                        json_response("200 OK", &body)
                     }
                     ("POST", "/tab") => {
                         if accept_tab_reports {
@@ -190,11 +194,11 @@ impl GhostHttpServer {
                                         warn!("failed to store tab report: {e}");
                                     }
                                 }
-                                Err(_) => return respond(&mut stream, &cors_response("400 Bad Request", "")).await,
+                                Err(_) => return respond(&mut stream, &json_response("400 Bad Request", "")).await,
                             }
                         }
                         // Opted out: accept and discard, so the extension stays quiet
-                        cors_response("204 No Content", "")
+                        json_response("204 No Content", "")
                     }
                     ("POST", "/inject") => {
                         let body = request_body(&request);
@@ -211,16 +215,16 @@ impl GhostHttpServer {
                                         injected_at: std::time::Instant::now(),
                                     };
                                 }
-                                cors_response("204 No Content", "")
+                                json_response("204 No Content", "")
                             }
-                            _ => cors_response("400 Bad Request", ""),
+                            _ => json_response("400 Bad Request", ""),
                         }
                     }
                     ("POST", "/clear") => {
                         if let Ok(mut g) = current.lock() {
                             *g = CurrentGhost::cleared();
                         }
-                        cors_response("204 No Content", "")
+                        json_response("204 No Content", "")
                     }
                     ("POST", "/shell-open") => match shell {
                         Some(ref bridge) => {
@@ -233,12 +237,12 @@ impl GhostHttpServer {
                             });
                             match cwd {
                                 Some(cwd) => shell_open_response(bridge, &cwd).await,
-                                None => cors_response("400 Bad Request", ""),
+                                None => json_response("400 Bad Request", ""),
                             }
                         }
-                        None => cors_response("404 Not Found", ""),
+                        None => json_response("404 Not Found", ""),
                     },
-                    _ => cors_response("404 Not Found", ""),
+                    _ => json_response("404 Not Found", ""),
                 };
 
                 respond(&mut stream, &response).await;
@@ -383,11 +387,45 @@ fn text_response(status: &str, body: &str) -> String {
     )
 }
 
-fn cors_response(status: &str, body: &str) -> String {
+/// No CORS headers: the extension reaches the server through its
+/// host_permissions, which need none, and nothing else should read it.
+fn json_response(status: &str, body: &str) -> String {
     format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len(),
     )
+}
+
+/// The card names your projects, files and cursor line, and the banner is
+/// drawn inside the pages you use. So only two callers get through: local
+/// tools (rvn, the shell hook), which send no Origin, and the browser
+/// extension, which sends its own extension origin. A web page always sends
+/// its origin, so a site you visit can neither read the card nor write into
+/// the banner. The Host check closes DNS rebinding, where a page's own name
+/// resolves to 127.0.0.1 and its requests look same-origin.
+fn request_allowed(request: &str, port: u16) -> bool {
+    let host_ok = header(request, "host").is_some_and(|h| {
+        h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}")
+    });
+    let origin_ok = match header(request, "origin") {
+        None => true,
+        Some(o) => ["chrome-extension://", "moz-extension://", "safari-web-extension://"]
+            .iter()
+            .any(|scheme| o.starts_with(scheme)),
+    };
+    host_ok && origin_ok
+}
+
+fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    request
+        .split("\r\n\r\n")
+        .next()?
+        .lines()
+        .skip(1)
+        .find_map(|line| {
+            let (k, v) = line.split_once(':')?;
+            k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+        })
 }
 
 async fn respond(stream: &mut tokio::net::TcpStream, response: &str) {
