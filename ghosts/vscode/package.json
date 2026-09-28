@@ -2,7 +2,12 @@
   "name": "revenant-ghost",
   "displayName": "REVENANT Ghost",
   "description": "Cognitive context restoration - ghost annotations that show where you left off",
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derealt/revenant"
+  },
   "publisher": "revenant",
   "engines": {
     "vscode": "^1.85.0"

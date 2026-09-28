@@ -2,7 +2,12 @@
   "name": "revenant-ghost-browser",
   "displayName": "REVENANT Ghost",
   "description": "Browser extension for cognitive context restoration - shows what you were doing when you last visited",
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derealt/revenant"
+  },
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",

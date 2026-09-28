@@ -1053,15 +1053,21 @@ fn cmd_setup(
             println!("\x1b[2m\u{2502}\x1b[0m via a Unix socket at ~/.revenant/vscode.sock.");
             println!("\x1b[2m\u{2502}\x1b[0m");
 
+            let vsix = format!("revenant-ghost-{}.vsix", env!("CARGO_PKG_VERSION"));
+            println!("\x1b[2m\u{2502}\x1b[0m Install the extension (VS Code; use `cursor` for Cursor):");
+            println!("\x1b[2m\u{2502}\x1b[0m   curl -fsSLO {}", release_asset_url(&vsix));
+            println!("\x1b[2m\u{2502}\x1b[0m   code --install-extension {vsix}");
+            println!("\x1b[2m\u{2502}\x1b[0m Then reload the editor window. The ghost binds on startup.");
+
             let ext_dir = find_project_root().map(|r| r.join("ghosts/vscode"));
             if let Ok(ref dir) = ext_dir {
                 if dir.exists() {
-                    println!("\x1b[2m\u{2502}\x1b[0m To install from source:");
+                    println!("\x1b[2m\u{2502}\x1b[0m");
+                    println!("\x1b[2m\u{2502}\x1b[0m Or build from this checkout:");
                     println!(
-                        "\x1b[2m\u{2502}\x1b[0m   cd {} && npm install && npm run build",
+                        "\x1b[2m\u{2502}\x1b[0m   cd {} && npm install && npm run build && npx @vscode/vsce package",
                         dir.display()
                     );
-                    println!("\x1b[2m\u{2502}\x1b[0m   code --install-extension ./revenant-ghost-0.1.0.vsix");
                 }
             }
 
@@ -1081,20 +1087,26 @@ fn cmd_setup(
             println!("\x1b[2m\u{2502}\x1b[0m and shows the context card as a banner. No native messaging,");
             println!("\x1b[2m\u{2502}\x1b[0m no other setup on the daemon side.");
             println!("\x1b[2m\u{2502}\x1b[0m");
-            println!("\x1b[2m\u{2502}\x1b[0m To build the extension:");
+            let zip = format!("revenant-chrome-extension-{}.zip", env!("CARGO_PKG_VERSION"));
+            println!("\x1b[2m\u{2502}\x1b[0m Install the extension:");
+            println!("\x1b[2m\u{2502}\x1b[0m   curl -fsSLO {}", release_asset_url(&zip));
+            println!("\x1b[2m\u{2502}\x1b[0m   unzip {zip} -d ~/.revenant/chrome-extension");
+            println!("\x1b[2m\u{2502}\x1b[0m Then open chrome://extensions, turn on Developer mode,");
+            println!("\x1b[2m\u{2502}\x1b[0m click Load unpacked and pick ~/.revenant/chrome-extension");
 
             let ext_dir = find_project_root()
                 .ok()
                 .map(|r| r.join("ghosts/browser"));
             if let Some(ref dir) = ext_dir {
                 if dir.exists() {
+                    println!("\x1b[2m\u{2502}\x1b[0m");
+                    println!("\x1b[2m\u{2502}\x1b[0m Or build from this checkout:");
                     println!(
-                        "\x1b[2m\u{2502}\x1b[0m   cd {} && npm install && npm run build",
+                        "\x1b[2m\u{2502}\x1b[0m   cd {} && npm install && npm run package   (load dist/)",
                         dir.display()
                     );
                 }
             }
-            println!("\x1b[2m\u{2502}\x1b[0m   Then load as unpacked extension in chrome://extensions");
             println!("\x1b[2m\u{2502}\x1b[0m");
             println!("\x1b[2m\u{2502}\x1b[0m Optional: let the daemon see your active tab as a context");
             println!("\x1b[2m\u{2502}\x1b[0m signal (off by default). In config.toml:");
@@ -1635,6 +1647,14 @@ fn format_age(dt: DateTime<Utc>) -> String {
             format!("{d}d")
         }
     }
+}
+
+/// Download URL for a file attached to this build's GitHub release
+fn release_asset_url(file: &str) -> String {
+    format!(
+        "https://github.com/derealt/revenant/releases/download/v{}/{file}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// Try to find the REVENANT project root (where Cargo.toml lives)
