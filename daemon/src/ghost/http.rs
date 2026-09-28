@@ -58,6 +58,10 @@ pub struct ShellBridge {
     /// The terminal MOTD path: a live MOTD is served to every shell
     /// that opens inside its window
     pub motd_path: PathBuf,
+    /// The greeting window: which card was last greeted on a return, and
+    /// when. New shells are greeted while it lasts (the card's TTL), then
+    /// stay silent until the next return opens a new one.
+    pub greeted: Arc<Mutex<Option<(String, std::time::SystemTime)>>>,
 }
 
 /// Holds the current ghost card as JSON string, set by the dispatcher.
@@ -259,26 +263,48 @@ impl GhostHttpServer {
 async fn shell_open_response(bridge: &ShellBridge, cwd: &str) -> String {
     // Resolve which project this shell belongs to: its own git root,
     // else wherever the user last was
+    // (after a reboot there is no active project yet: the freshest card's
+    // project stands in, so the first shell back is still a return)
     let project = crate::watcher::find_git_root(&PathBuf::from(cwd))
         .map(|p| p.to_string_lossy().to_string())
-        .or_else(|| bridge.detector.active_project());
+        .or_else(|| bridge.detector.active_project())
+        .or_else(|| {
+            bridge
+                .store
+                .cards_since(chrono::Utc::now() - chrono::Duration::days(30), 1)
+                .ok()
+                .and_then(|cards| cards.into_iter().next())
+                .map(|c| c.project_dir)
+        });
 
     // A live terminal ghost is served as-is to shells of ITS project, so
     // every tab opened inside its window sees the MOTD the reaper will
     // soon fade. A shell in another project gets its own greeting below:
     // hopping to billing must not greet a new harbor tab with billing.
     if let Ok(motd) = tokio::fs::read_to_string(&bridge.motd_path).await {
-        let live_project = tokio::fs::read_to_string(bridge.motd_path.with_extension("json"))
+        let meta = tokio::fs::read_to_string(bridge.motd_path.with_extension("json"))
             .await
             .ok()
-            .and_then(|m| serde_json::from_str::<serde_json::Value>(&m).ok())
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(&m).ok());
+        let live_project = meta
+            .as_ref()
             .and_then(|m| m.get("project_dir").and_then(|p| p.as_str()).map(String::from));
+        // The reaper only sweeps every few minutes, so the file can outlive
+        // its window: an expired MOTD is not live, whatever is on disk
+        let expired = meta
+            .as_ref()
+            .and_then(|m| m.get("expires_at").and_then(|e| e.as_str()))
+            .and_then(|e| chrono::DateTime::parse_from_rfc3339(e).ok())
+            .is_some_and(|e| e < chrono::Utc::now());
         let same_project = match (&live_project, &project) {
             (Some(live), Some(here)) => live == here,
             // Metadata from an older daemon, or a shell outside any project
             _ => true,
         };
-        if same_project {
+        if expired {
+            let _ = tokio::fs::remove_file(&bridge.motd_path).await;
+            let _ = tokio::fs::remove_file(bridge.motd_path.with_extension("json")).await;
+        } else if same_project {
             return text_response("200 OK", &motd);
         }
     }
@@ -287,8 +313,10 @@ async fn shell_open_response(bridge: &ShellBridge, cwd: &str) -> String {
     // return (absence, project switch, or first sighting). A mid-flow
     // tab still gets its greeting below, but must not flash banners
     // in the browser and editor.
+    let mut returned = false;
     if let Some(ref project) = project {
         if let Some(event) = bridge.detector.shell_opened(project) {
+            returned = true;
             // A shell-open landing on a different project banks a
             // departure for the previous one first, exactly like the
             // watcher's switch path
@@ -325,9 +353,33 @@ async fn shell_open_response(bridge: &ShellBridge, cwd: &str) -> String {
                 .and_then(|cards| cards.into_iter().next())
         });
 
-    match card {
-        Some(card) => text_response("200 OK", &crate::ghost::terminal::render_motd(&card)),
-        None => text_response("204 No Content", ""),
+    let Some(card) = card else {
+        return text_response("204 No Content", "");
+    };
+
+    // "ghost fades in 1min of activity" must be true. A return opens the
+    // greeting window for this card; shells inside it are greeted, and
+    // after it the terminal is silent until the next return.
+    let now = std::time::SystemTime::now();
+    let window = std::time::Duration::from_secs(card.ttl_seconds.max(1));
+    let greet = match bridge.greeted.lock() {
+        Ok(mut greeted) => {
+            if returned {
+                *greeted = Some((card.id.clone(), now));
+                true
+            } else {
+                matches!(&*greeted, Some((id, at))
+                    if *id == card.id
+                        && now.duration_since(*at).unwrap_or_default() < window)
+            }
+        }
+        Err(_) => returned,
+    };
+
+    if greet {
+        text_response("200 OK", &crate::ghost::terminal::render_motd(&card))
+    } else {
+        text_response("204 No Content", "")
     }
 }
 

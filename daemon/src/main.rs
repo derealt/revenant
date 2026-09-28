@@ -93,6 +93,7 @@ async fn main() -> Result<()> {
             store: Arc::clone(&store),
             switch_tx: switch_tx.clone(),
             motd_path: expand_path(&config.ghosts.terminal_config.motd_file),
+            greeted: Default::default(),
         }),
     );
     let ghost_http_server = Arc::clone(&ghost_http);

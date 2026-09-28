@@ -770,6 +770,93 @@ async fn http_server_refuses_web_pages() {
     assert!(!resp.to_lowercase().contains("access-control-allow-origin: *"));
 }
 
+/// Field bug (2026-09-28, founder screenshot): every new terminal, even in
+/// the home folder, printed the same Awatum note from 2h39m earlier under
+/// the footer "ghost fades in 1min of activity". A return (sleep, absence,
+/// project switch, first sighting) opens a greeting window as long as the
+/// card's TTL; shells inside it are greeted, shells after it are silent
+/// until the next return.
+#[tokio::test]
+async fn terminal_greeting_fades_after_its_window() {
+    use revenant::ghost::http::{GhostHttpServer, ShellBridge};
+    use revenant::store::ContextCard;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let tmp = std::env::temp_dir().join("revenant-test-greeting-window");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(tmp.join("project/.git")).unwrap();
+    let project_dir = tmp.join("project").to_str().unwrap().to_string();
+    let store = Arc::new(ContextStore::open(&tmp.join("g.db")).unwrap());
+    store.migrate().unwrap();
+    store
+        .save_card(&ContextCard {
+            id: "g1".into(),
+            project_dir: project_dir.clone(),
+            project_name: "project".into(),
+            summary: "You were fixing the greeting window.".into(),
+            next_step: "".into(),
+            created_at: chrono::Utc::now(),
+            signals_json: "{}".into(),
+            ttl_seconds: 1,
+        })
+        .unwrap();
+    let (switch_tx, _rx) = tokio::sync::mpsc::channel(8);
+    let port = 17714u16;
+    let server = Arc::new(GhostHttpServer::new(false, 60).with_shell_bridge(ShellBridge {
+        detector: Arc::new(SwitchDetector::new(&RevenantConfig::default())),
+        store: Arc::clone(&store),
+        switch_tx,
+        motd_path: tmp.join("motd"),
+        greeted: Default::default(),
+    }));
+    let serve = Arc::clone(&server);
+    tokio::spawn(async move { serve.serve(port).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    async fn open(port: u16, cwd: &str) -> String {
+        let body = format!(r#"{{"cwd":"{cwd}"}}"#);
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(format!(
+            "POST /shell-open HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()).as_bytes()).await.unwrap();
+        let mut r = String::new();
+        s.read_to_string(&mut r).await.unwrap();
+        r
+    }
+
+    // Right after a (re)start, a shell outside any project is the first
+    // one back: greeted with the freshest card
+    assert!(open(port, "/").await.contains("greeting window"));
+    // First sighting of the project itself: greeted
+    assert!(open(port, &project_dir).await.contains("greeting window"));
+    // Another tab inside the window: still greeted
+    assert!(open(port, &project_dir).await.contains("greeting window"));
+    // After the window, mid-flow: silent, in the project and outside it
+    tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+    let r = open(port, &project_dir).await;
+    assert!(r.starts_with("HTTP/1.1 204") && !r.contains("greeting window"), "stale ghost: {r}");
+    let r = open(port, "/").await;
+    assert!(!r.contains("greeting window"), "stale ghost in a non-project shell: {r}");
+
+    // Field bug, same day: the MOTD file outlives its window until the
+    // reaper sweeps (every 2 minutes). An expired file is not live.
+    fs::write(tmp.join("motd"), "EXPIRED MOTD BODY").unwrap();
+    fs::write(
+        tmp.join("motd.json"),
+        format!(
+            r#"{{"card_id":"g1","project_dir":"{project_dir}","expires_at":"{}"}}"#,
+            (chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339()
+        ),
+    )
+    .unwrap();
+    let r = open(port, &project_dir).await;
+    assert!(!r.contains("EXPIRED MOTD BODY"), "served an expired MOTD file: {r}");
+    assert!(!tmp.join("motd").exists(), "expired MOTD should be swept");
+
+    cleanup_test_project(&tmp);
+}
+
 #[tokio::test]
 async fn http_shell_open_answers_a_new_shell() {
     use revenant::ghost::http::{GhostHttpServer, ShellBridge};
@@ -804,6 +891,7 @@ async fn http_shell_open_answers_a_new_shell() {
         store: Arc::clone(&store),
         switch_tx,
         motd_path: motd_path.clone(),
+        greeted: Default::default(),
     }));
     let port = 17712u16;
     let serve = Arc::clone(&server);

@@ -2,7 +2,7 @@
   "name": "revenant-ghost-browser",
   "displayName": "Revenant: where you left off",
   "description": "Shows where you left off in your code when you come back to your computer",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "license": "MIT",
   "repository": {
     "type": "git",

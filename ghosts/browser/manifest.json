@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Revenant: where you left off",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Shows where you left off in your code when you come back to your computer. Works with the free Revenant app for Mac and Linux.",
   "homepage_url": "https://github.com/derealt/revenant",
   "permissions": [
