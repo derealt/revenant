@@ -82,7 +82,9 @@ pub fn render_motd(card: &ContextCard) -> String {
     let mut motd = String::with_capacity(512);
 
     // Top border with project name centered
-    let header = format!(" REVENANT \u{2502} {} \u{2502} {} ago ", card.project_name, age_str);
+    // "2h ago", but "just now" never gets a dangling "ago"
+    let when = if age_str == "just now" { age_str.to_string() } else { format!("{age_str} ago") };
+    let header = format!(" REVENANT \u{2502} {} \u{2502} {} ", card.project_name, when);
     motd.push_str(&format!(
         "{dim}\u{2554}\u{2550}\u{2550}{reset}{accent} {header}{reset}{dim} \u{2550}\u{2550}\u{2557}{reset}\n",
     ));

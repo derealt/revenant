@@ -115,6 +115,60 @@ fn git_signal_captures_branch_status_and_commits() {
     cleanup_test_project(&project);
 }
 
+/// Field regression (2026-09-28): a repo that COMMITS a compiler output
+/// (web/tsconfig.tsbuildinfo) shows it as modified after every build, and the
+/// card said "you were configuring tsconfig.tsbuildinfo" for eight hours.
+/// Generated files are not the user's work: they never become a topic and
+/// never count as in-flight edits.
+#[test]
+fn generated_artifacts_never_become_the_card() {
+    let tmp = std::env::temp_dir().join("revenant-test-artifacts");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(tmp.join("web")).unwrap();
+    let run = |args: &[&str]| {
+        Command::new("git").args(args).current_dir(&tmp).output().unwrap()
+    };
+    run(&["init"]);
+    run(&["config", "user.email", "test@revenant.dev"]);
+    run(&["config", "user.name", "Test"]);
+    fs::write(tmp.join("web/tsconfig.tsbuildinfo"), "{\"v\":1}").unwrap();
+    fs::write(tmp.join("web/package-lock.json"), "{}").unwrap();
+    fs::write(tmp.join("web/app.ts"), "export const a = 1;\n").unwrap();
+    run(&["add", "."]);
+    run(&["commit", "-m", "initial"]);
+
+    // A build rewrites the artifacts; the user touched nothing
+    fs::write(tmp.join("web/tsconfig.tsbuildinfo"), "{\"v\":2}").unwrap();
+    fs::write(tmp.join("web/package-lock.json"), "{\"x\":1}").unwrap();
+    fs::write(tmp.join("web/app.js.map"), "{}").unwrap();
+
+    let state = working_state_for(&tmp);
+    let g = state.git.as_ref().unwrap();
+    assert!(
+        g.changed_files.is_empty(),
+        "generated files are not the user's work, got {:?}",
+        g.changed_files
+    );
+    assert_eq!((g.staged, g.modified, g.untracked), (0, 0, 0));
+    let card = rule_based_compress(&state);
+    let text = format!("{} {}", card.summary, card.next_step).to_lowercase();
+    for noise in ["tsbuildinfo", "package-lock", ".map", "unstaged"] {
+        assert!(!text.contains(noise), "card spoke an artifact ({noise}): {text}");
+    }
+
+    // A real edit next to the artifacts is still the card's subject
+    fs::write(tmp.join("web/app.ts"), "export const a = 2;\n").unwrap();
+    let state = working_state_for(&tmp);
+    let g = state.git.as_ref().unwrap();
+    let paths: Vec<&str> = g.changed_files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["web/app.ts"]);
+    // An unstaged-only edit on the FIRST status line stays unstaged (the
+    // porcelain column once got trimmed away and it read as staged)
+    assert_eq!((g.staged, g.modified), (0, 1));
+
+    cleanup_test_project(&tmp);
+}
+
 #[test]
 fn git_capture_fails_outside_a_repo() {
     let tmp = std::env::temp_dir().join("revenant-test-not-a-repo");
@@ -331,6 +385,8 @@ async fn full_pipeline_snapshot_compress_store_restore() {
     assert!(motd.contains(&restored.project_name));
     assert!(motd.contains(&restored.summary));
     assert!(motd.contains("ghost fades"));
+    // A fresh card reads "just now", never "just now ago"
+    assert!(motd.contains("just now") && !motd.contains("just now ago"), "{motd}");
 
     // Machine-readable metadata for the shell scripts
     let meta: serde_json::Value =
@@ -522,7 +578,7 @@ async fn http_server_serves_inject_and_clear() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let req = format!(
-            "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
         s.write_all(req.as_bytes()).await.unwrap();
@@ -533,7 +589,7 @@ async fn http_server_serves_inject_and_clear() {
     let get = || async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        s.write_all(b"GET /ghost HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        s.write_all(format!("GET /ghost HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").as_bytes())
             .await
             .unwrap();
         let mut resp = String::new();
@@ -581,6 +637,81 @@ async fn http_server_serves_inject_and_clear() {
     );
 }
 
+/// The card names your projects, files and cursor line. A web page you visit
+/// must never read it or write into the banner: the server used to answer
+/// every origin with `Access-Control-Allow-Origin: *`. Only the browser
+/// extension (its own extension origin) and local tools (no Origin at all)
+/// get through, and a rebinding Host (evil.example resolving to 127.0.0.1)
+/// is refused.
+#[tokio::test]
+async fn http_server_refuses_web_pages() {
+    use revenant::ghost::http::GhostHttpServer;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let port = 17713u16;
+    let server = Arc::new(GhostHttpServer::new(false, 60));
+    let serve = Arc::clone(&server);
+    tokio::spawn(async move { serve.serve(port).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    async fn send(port: u16, req: String) -> String {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut resp = String::new();
+        s.read_to_string(&mut resp).await.unwrap();
+        resp
+    }
+    let get = |host: String, origin: Option<&'static str>| {
+        let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
+        send(port, format!("GET /ghost HTTP/1.1\r\nHost: {host}\r\n{origin}Connection: close\r\n\r\n"))
+    };
+    let post = |path: &'static str, origin: Option<&'static str>, body: &'static str| {
+        let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
+        send(port, format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{origin}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ))
+    };
+    let local = format!("127.0.0.1:{port}");
+    let secret = r#"{"type":"inject","card":{"id":"s1","summary":"You were editing payroll/secret.rs.","next_step":"","project_dir":"/tmp/x","project_name":"x","ttl_seconds":120}}"#;
+    let fake = r#"{"type":"inject","card":{"id":"f1","summary":"Session expired, sign in at evil.example","next_step":"","project_dir":"/tmp/x","project_name":"x","ttl_seconds":120}}"#;
+
+    // A local tool (rvn, the shell hook: no Origin) sets the card
+    assert!(post("/inject", None, secret).await.starts_with("HTTP/1.1 204"));
+
+    // A web page cannot read it
+    let resp = get(local.clone(), Some("https://evil.example")).await;
+    assert!(resp.starts_with("HTTP/1.1 403"), "got: {resp}");
+    assert!(!resp.contains("secret.rs"), "card leaked to a web page: {resp}");
+
+    // A web page cannot write into the banner, clear it, or open a shell return
+    for (path, body) in [("/inject", fake), ("/clear", ""), ("/tab", "[]"), ("/shell-open", r#"{"cwd":"/tmp"}"#)] {
+        let resp = post(path, Some("https://evil.example"), body).await;
+        assert!(resp.starts_with("HTTP/1.1 403"), "{path} from a web page got: {resp}");
+    }
+    let resp = get(local.clone(), None).await;
+    assert!(resp.contains("secret.rs") && !resp.contains("evil.example"), "card was altered: {resp}");
+
+    // Sandboxed frames send Origin: null; also refused
+    let resp = get(local.clone(), Some("null")).await;
+    assert!(resp.starts_with("HTTP/1.1 403"), "got: {resp}");
+
+    // DNS rebinding: same-origin requests carry no Origin but a foreign Host
+    let resp = get(format!("evil.example:{port}"), None).await;
+    assert!(resp.starts_with("HTTP/1.1 403"), "got: {resp}");
+    assert!(!resp.contains("secret.rs"));
+
+    // The browser extension reads it, by either loopback name
+    let resp = get(local.clone(), Some("chrome-extension://abcdefghijklmnop")).await;
+    assert!(resp.contains("secret.rs"), "extension must read the card: {resp}");
+    let resp = get(format!("localhost:{port}"), Some("moz-extension://1234")).await;
+    assert!(resp.contains("secret.rs"), "got: {resp}");
+
+    // No response ever grants cross-origin reads
+    assert!(!resp.to_lowercase().contains("access-control-allow-origin: *"));
+}
+
 #[tokio::test]
 async fn http_shell_open_answers_a_new_shell() {
     use revenant::ghost::http::{GhostHttpServer, ShellBridge};
@@ -626,7 +757,7 @@ async fn http_shell_open_answers_a_new_shell() {
         let body = format!(r#"{{"cwd":"{cwd}"}}"#);
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let req = format!(
-            "POST /shell-open HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "POST /shell-open HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
         s.write_all(req.as_bytes()).await.unwrap();
@@ -667,7 +798,7 @@ async fn http_shell_open_answers_a_new_shell() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         s.write_all(
-            b"POST /shell-open HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\nConnection: close\r\n\r\nnot json",
+            format!("POST /shell-open HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 8\r\nConnection: close\r\n\r\nnot json").as_bytes(),
         )
         .await
         .unwrap();
