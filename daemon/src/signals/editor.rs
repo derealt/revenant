@@ -120,8 +120,10 @@ fn find_recent_files(project_dir: &Path, threshold: SystemTime) -> Result<Vec<Op
 
         let path = entry.path();
 
-        // Skip non-source files
-        if !is_source_file(path) {
+        // Skip non-source files and tool-written artifacts (lockfiles, maps)
+        if !is_source_file(path)
+            || super::git::is_generated_artifact(&path.to_string_lossy())
+        {
             continue;
         }
 

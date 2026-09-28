@@ -79,13 +79,47 @@ pub fn current_branch(project_dir: &str) -> Result<String> {
 }
 
 fn git_cmd(project_dir: &str, args: &[&str]) -> Result<String> {
+    Ok(git_raw(project_dir, args)?.trim().to_string())
+}
+
+/// Output with only trailing whitespace removed. Porcelain status needs this:
+/// its first column is a space for an unstaged-only change, and a full trim
+/// shifted the first line left, reading " M web/app.ts" as a STAGED
+/// "eb/app.ts".
+fn git_raw(project_dir: &str, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(["-C", project_dir])
         .args(args)
         .output()
         .context("failed to execute git")?;
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
+}
+
+/// Files a tool rewrites on its own: compiler caches, lockfiles, source maps,
+/// minified bundles. Some repos commit them, so git reports them as changed
+/// after every build or install, but they are never what the user was doing.
+/// They never become a card's topic and never count as in-flight edits.
+pub fn is_generated_artifact(path: &str) -> bool {
+    const LOCKFILES: &[&str] = &[
+        "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml",
+        "bun.lock", "bun.lockb", "Cargo.lock", "go.sum", "poetry.lock", "Pipfile.lock",
+        "uv.lock", "Gemfile.lock", "composer.lock", "flake.lock", "Podfile.lock",
+        "mix.lock", "pubspec.lock", "packages.lock.json", ".DS_Store",
+    ];
+    const SUFFIXES: &[&str] = &[
+        ".tsbuildinfo", ".map", ".min.js", ".min.css", ".pyc", ".pyo", ".class",
+    ];
+    const DIRS: &[&str] = &[
+        "node_modules", ".next", ".nuxt", ".svelte-kit", ".turbo", "__pycache__",
+        ".pytest_cache", ".mypy_cache", ".gradle",
+    ];
+
+    let path = path.trim_matches('"');
+    let name = path.rsplit('/').next().unwrap_or(path);
+    LOCKFILES.contains(&name)
+        || SUFFIXES.iter().any(|s| name.ends_with(s))
+        || path.split('/').any(|part| DIRS.contains(&part))
 }
 
 fn git_branch(project_dir: &str) -> Result<String> {
@@ -101,7 +135,7 @@ fn git_branch(project_dir: &str) -> Result<String> {
 fn git_status(
     project_dir: &str,
 ) -> Result<(usize, usize, usize, Vec<ChangedFile>)> {
-    let output = git_cmd(project_dir, &["status", "--porcelain=v1"])?;
+    let output = git_raw(project_dir, &["status", "--porcelain=v1"])?;
     let mut staged = 0usize;
     let mut modified = 0usize;
     let mut untracked = 0usize;
@@ -113,7 +147,12 @@ fn git_status(
         }
         let index = line.as_bytes()[0];
         let worktree = line.as_bytes()[1];
-        let path = line[3..].to_string();
+        // A rename reads "old -> new"; the file now lives at new
+        let raw = &line[3..];
+        let path = raw.rsplit(" -> ").next().unwrap_or(raw).to_string();
+        if is_generated_artifact(&path) {
+            continue;
+        }
 
         // Index column: staged changes
         match index {
