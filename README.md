@@ -2,7 +2,7 @@
 
 **Revenant shows you where you left off in your code when you come back from a break, a meeting or another branch.**
 
-It runs in the background on macOS and Linux. When you leave a task, it writes a short note from your git state, your editor and your shell. When you come back, the note is waiting in the first place you look: a new terminal, VS Code or Cursor, or Chrome. It never records your screen, and nothing leaves your machine.
+It runs in the background on macOS and Linux. When you leave a task, it writes a short note from your git state, your editor and your shell. When you come back, the note is waiting in the first place you look: a new terminal, VS Code or Cursor, or Chrome. It works only from your git state, editor and shell history, and everything stays on your machine.
 
 ![A new terminal opens and Revenant prints where you left off in this project](docs/img/demo.gif)
 
